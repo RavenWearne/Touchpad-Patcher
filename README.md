@@ -53,13 +53,7 @@ Failures retain the capture as a timestamped file in `logs/`, display its exact
 path and wait for a keypress, making the report straightforward to return for
 investigation.
 
-Start with the read-only preflight:
-
-```bash
-./scripts/t14-ps2-kernel-installer.sh --dry-run preflight
-```
-
-Then build and install after reviewing the detected hardware, source version,
+To build and install after reviewing the detected hardware, source version,
 kernel configuration and boot tooling:
 
 ```bash
@@ -111,8 +105,8 @@ and test the new build before removing an older custom build.
 
 The patch is kernel-source portable. Kernel packaging is not: distributions
 vary in compiler dependencies, config deltas, initramfs generators, Secure Boot
-signing and bootloaders. The adapters cover common layouts, but `--dry-run` and
-a retained stock kernel are mandatory safety measures. Exotic UKI-only,
+signing and bootloaders. The adapters perform automatic safety checks, but a
+retained stock kernel remains mandatory. Exotic UKI-only,
 encrypted-boot or custom bootloader setups may require manual integration.
 
 ## Distribution testing
@@ -120,5 +114,5 @@ encrypted-boot or custom bootloader setups may require manual integration.
 Fedora is validated end-to-end. The Debian/Ubuntu, Arch, openSUSE and generic
 adapters need broader physical testing. Please use the repository's
 [distribution test report](https://github.com/RavenWearne/thinkpad-synaptics-patch/issues/new?template=distro-test.yml)
-form so hardware detection, dry-run, build, boot and SynPS/2 verification
+form so hardware detection, build, boot and SynPS/2 verification
 results remain comparable.

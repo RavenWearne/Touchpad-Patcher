@@ -56,22 +56,13 @@ body:
     validations:
       required: true
 
-  - type: textarea
-    id: dry_run
-    attributes:
-      label: Dry-run result
-      description: Run `./scripts/t14-ps2-kernel-installer.sh --dry-run preflight` and paste its complete output.
-      render: shell
-    validations:
-      required: true
-
   - type: dropdown
     id: build_result
     attributes:
       label: Build and installation result
       options:
         - Succeeded
-        - Failed during dependency or preflight checks
+        - Failed during dependency or safety checks
         - Failed during build
         - Failed during installation
         - Not tested

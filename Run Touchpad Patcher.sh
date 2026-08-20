@@ -117,7 +117,7 @@ show_compatibility() {
 	printf '  Kernel:     stable upstream Linux 4.x+ on x86-64 with supported Synaptics source layout\n'
 	if (( ${#missing[@]} )); then
 		printf '  Warning:    missing adapter tool(s): %s\n' "${missing[*]}"
-		printf '              Preflight will stop safely unless these are installed.\n'
+		printf '              Automatic safety checks will stop unless these are installed.\n'
 	else
 		printf '  Tooling:    required adapter commands detected\n'
 	fi
