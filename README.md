@@ -17,7 +17,7 @@ a conservative `kernel-install` fallback.
 
 ### Clone and run
 
-Clone the private repository on the target machine, then run the executable
+Clone the repository on the target machine, then run the executable
 top-level launcher:
 
 ```bash
