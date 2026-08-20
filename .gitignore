@@ -4,6 +4,7 @@
 *
 
 !.gitignore
+!LICENSE
 !README.md
 !Run Touchpad Patcher.sh
 !scripts/
