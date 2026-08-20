@@ -1,0 +1,123 @@
+name: Distribution test report
+description: Report a Touchpad Patcher test on a supported ThinkPad with LEN2068 hardware
+title: "[Distro test]: "
+labels:
+  - distro-test
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing. Keep a stock distribution kernel installed as a fallback.
+        Remove usernames, serial numbers, hostnames, and other private information from pasted logs.
+
+  - type: input
+    id: distro
+    attributes:
+      label: Distribution and version
+      description: Include the edition or desktop variant when relevant.
+      placeholder: Fedora Linux 44 KDE Plasma Desktop Edition
+    validations:
+      required: true
+
+  - type: input
+    id: kernel
+    attributes:
+      label: Original distribution kernel
+      description: Output from `uname -r` before building the patched kernel.
+      placeholder: 7.1.8-200.fc44.x86_64
+    validations:
+      required: true
+
+  - type: input
+    id: thinkpad
+    attributes:
+      label: Exact ThinkPad model
+      description: Include generation and machine type when available; do not include the serial number.
+      placeholder: ThinkPad T14 Gen 1, type 20S0
+    validations:
+      required: true
+
+  - type: input
+    id: touchpad
+    attributes:
+      label: Touchpad model
+      description: Include the reported Synaptics product and firmware ID when available.
+      placeholder: Synaptics TM3471-020
+    validations:
+      required: true
+
+  - type: textarea
+    id: len2068
+    attributes:
+      label: LEN2068 detection
+      description: Paste the patcher's dynamic detection line or the relevant `firmware_id` output.
+      render: shell
+      placeholder: "[t14-patch] touchpad: found LEN2068 at /sys/bus/serio/devices/serio1 ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: dry_run
+    attributes:
+      label: Dry-run result
+      description: Run `./scripts/t14-ps2-kernel-installer.sh --dry-run preflight` and paste its complete output.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: build_result
+    attributes:
+      label: Build and installation result
+      options:
+        - Succeeded
+        - Failed during dependency or preflight checks
+        - Failed during build
+        - Failed during installation
+        - Not tested
+    validations:
+      required: true
+
+  - type: textarea
+    id: build_details
+    attributes:
+      label: Build details or failure output
+      description: Include the final success output or relevant failure section. Attach a sanitized logfile if useful.
+      render: shell
+
+  - type: dropdown
+    id: boot_result
+    attributes:
+      label: Patched-kernel boot result
+      options:
+        - Booted successfully
+        - Failed to boot; stock kernel fallback worked
+        - Failed to boot; fallback problem encountered
+        - Not tested
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: SynPS/2 verification
+      description: After booting the patched kernel, run `./scripts/t14-ps2-kernel-installer.sh verify` and paste the result.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional observations
+      description: Describe tap reliability, suspend/resume behavior, warnings, or distribution-specific steps.
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: I kept a stock distribution kernel installed as a fallback.
+          required: true
+        - label: I removed private information from pasted output and attached logs.
+          required: true

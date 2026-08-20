@@ -4,6 +4,11 @@
 *
 
 !.gitignore
+!.github/
+.github/*
+!.github/ISSUE_TEMPLATE/
+.github/ISSUE_TEMPLATE/*
+!.github/ISSUE_TEMPLATE/distro-test.yml
 !LICENSE
 !README.md
 !Run Touchpad Patcher.sh

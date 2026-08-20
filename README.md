@@ -26,6 +26,14 @@ cd "Touchpad Patcher"
 ./Run\ Touchpad\ Patcher.sh
 ```
 
+`main` contains the latest development version. For a known-good release,
+select a version from [GitHub Releases](https://github.com/RavenWearne/Touchpad-Patcher/releases)
+and check out its tag before running the launcher. For example:
+
+```bash
+git checkout v1.0.0
+```
+
 It requests sudo once, keeps that authentication alive during compilation,
 derives the current upstream kernel series, and checks for both the matching
 custom kernel image and module tree. If the current series is already patched,
@@ -106,3 +114,11 @@ vary in compiler dependencies, config deltas, initramfs generators, Secure Boot
 signing and bootloaders. The adapters cover common layouts, but `--dry-run` and
 a retained stock kernel are mandatory safety measures. Exotic UKI-only,
 encrypted-boot or custom bootloader setups may require manual integration.
+
+## Distribution testing
+
+Fedora is validated end-to-end. The Debian/Ubuntu, Arch, openSUSE and generic
+adapters need broader physical testing. Please use the repository's
+[distribution test report](https://github.com/RavenWearne/Touchpad-Patcher/issues/new?template=distro-test.yml)
+form so hardware detection, dry-run, build, boot and SynPS/2 verification
+results remain comparable.
