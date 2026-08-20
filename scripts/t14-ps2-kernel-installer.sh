@@ -74,17 +74,33 @@ detect_platform() {
 }
 
 hardware_guard() {
-	local vendor product version pnp firmware
+	local vendor product version firmware firmware_file firmware_id matched_device
+	local -a observed_firmware_ids
 	vendor=$(read_dmi sys_vendor)
 	product=$(read_dmi product_name)
 	version=$(read_dmi product_version)
-	pnp=$(cat /sys/bus/serio/devices/serio1/firmware_id 2>/dev/null || true)
 	firmware=$(journalctl -b -k --no-pager 2>/dev/null | sed -n 's/.*product: \(TM[^,]*\), fw id: \([0-9]*\).*/\1 fw=\2/p' | head -n1)
-	log "hardware: vendor='$vendor' product='$product' version='$version' pnp='$pnp' ${firmware:+sensor='$firmware'}"
+	observed_firmware_ids=()
+	firmware_id=
+	matched_device=
+	for firmware_file in /sys/bus/serio/devices/*/firmware_id; do
+		[[ -r "$firmware_file" ]] || continue
+		firmware_id=$(<"$firmware_file")
+		observed_firmware_ids+=("${firmware_file%/firmware_id}='${firmware_id:-<empty>}'")
+		if [[ "$firmware_id" == *LEN2068* ]]; then
+			matched_device=${firmware_file%/firmware_id}
+			break
+		fi
+	done
+	log "hardware: vendor='$vendor' product='$product' version='$version' ${firmware:+sensor='$firmware'}"
 	[[ "$vendor" == LENOVO* ]] || die "this guarded patch is only for Lenovo hardware"
-	if [[ "$pnp" != *LEN2068* && "$product $version" != *"ThinkPad T14 Gen 1"* ]]; then
-		die "LEN2068 / ThinkPad T14 Gen 1 was not detected; refusing broad kernel modification"
+	if [[ -z "$matched_device" ]]; then
+		if (( ${#observed_firmware_ids[@]} )); then
+			die "LEN2068 was not found in any readable serio firmware ID (observed: ${observed_firmware_ids[*]}); refusing kernel modification"
+		fi
+		die "LEN2068 was not found because no readable /sys/bus/serio/devices/*/firmware_id files are available; refusing kernel modification"
 	fi
+	log "touchpad: found LEN2068 at $matched_device (firmware ID: '$firmware_id')"
 	if (( ! assume_yes && ! dry_run )); then
 		printf 'Build the LEN2068 SynPS/2 policy kernel for this machine? [y/N] '
 		read -r answer

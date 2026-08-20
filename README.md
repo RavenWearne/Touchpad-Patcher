@@ -66,7 +66,8 @@ After rebooting into the distinctly suffixed kernel, verify the transport:
 
 The installer deliberately:
 
-- refuses non-Lenovo and non-`LEN2068`/T14 Gen 1 machines;
+- dynamically searches readable serio firmware IDs for `LEN2068`, reports the
+  matched device, and refuses non-Lenovo or unmatched machines before building;
 - structurally inspects `smbus_pnp_ids`, patches exactly one `LEN2068` entry,
   recognizes previously patched trees, and treats kernels that never forced
   that ID as already safe;
