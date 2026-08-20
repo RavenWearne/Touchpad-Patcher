@@ -21,13 +21,13 @@ Clone the repository on the target machine, then run the executable
 top-level launcher:
 
 ```bash
-git clone https://github.com/RavenWearne/Touchpad-Patcher.git "Touchpad Patcher"
+git clone https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
 cd "Touchpad Patcher"
 ./Run\ Touchpad\ Patcher.sh
 ```
 
 `main` contains the latest development version. For a known-good release,
-select a version from [GitHub Releases](https://github.com/RavenWearne/Touchpad-Patcher/releases)
+select a version from [GitHub Releases](https://github.com/RavenWearne/thinkpad-synaptics-patch/releases)
 and check out its tag before running the launcher. For example:
 
 ```bash
@@ -119,6 +119,6 @@ encrypted-boot or custom bootloader setups may require manual integration.
 
 Fedora is validated end-to-end. The Debian/Ubuntu, Arch, openSUSE and generic
 adapters need broader physical testing. Please use the repository's
-[distribution test report](https://github.com/RavenWearne/Touchpad-Patcher/issues/new?template=distro-test.yml)
+[distribution test report](https://github.com/RavenWearne/thinkpad-synaptics-patch/issues/new?template=distro-test.yml)
 form so hardware detection, dry-run, build, boot and SynPS/2 verification
 results remain comparable.
