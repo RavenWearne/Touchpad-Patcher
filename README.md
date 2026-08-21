@@ -14,11 +14,11 @@ and are never stored in Git.
 ```bash
 git clone --no-checkout https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
 cd "Touchpad Patcher"
-git switch --create stable-v1.1.0 v1.1.0
+git switch --create stable-v1.1.1 v1.1.1
 ./Run\ Touchpad\ Patcher.sh
 ```
 
-This checks out the known `v1.1.0` release on a normal local branch rather than
+This checks out the known `v1.1.1` release on a normal local branch rather than
 using the unreleased `main` branch or a detached HEAD. Published versions are
 available from [GitHub Releases](https://github.com/RavenWearne/thinkpad-synaptics-patch/releases).
 
@@ -68,7 +68,7 @@ timestamp alive during the long build so it should not ask again near the end.
 Dependencies are adapter-specific. On Debian, Ubuntu, and Linux Mint the
 installer refreshes APT metadata only when packages are missing, then installs
 the complete audited kernel build/install set before touching source. This
-includes the compiler toolchain, `bc`, `bison`, `flex`, Perl, Python,
+includes the compiler toolchain, `bc`, `bison`, `flex`, GNU Awk (`gawk`), Perl, Python,
 `pkg-config`, OpenSSL, ELF/DWARF, zlib/zstd/lz4/lzo and ncurses development
 headers, `dwarves`/`pahole`, compression tools, `rsync`, `cpio`, `kmod`,
 initramfs tooling, GRUB tooling, and configuration-dependent GCC plug-in,
@@ -150,7 +150,7 @@ integration.
 ## Distribution testing
 
 Fedora is validated end-to-end. Linux Mint 22.3 testing is in progress for
-v1.1.0; Debian/Ubuntu, Arch, openSUSE, and generic adapters need broader
+v1.1.1; Debian/Ubuntu, Arch, openSUSE, and generic adapters need broader
 physical testing. Submit results with the repository's
 [distribution test report](https://github.com/RavenWearne/thinkpad-synaptics-patch/issues/new?template=distro-test.yml)
 so hardware detection, dependencies, build, boot, and SynPS/2 verification are

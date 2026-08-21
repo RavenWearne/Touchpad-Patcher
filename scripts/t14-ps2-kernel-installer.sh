@@ -294,7 +294,7 @@ config_has() {
 dependency_packages_debian() {
 	local compiler_package
 	dependency_packages=(
-		build-essential binutils bc bison flex pkg-config perl python3
+		build-essential binutils bc bison flex gawk pkg-config perl python3
 		tar xz-utils gzip bzip2 zstd lz4 lzop curl ca-certificates
 		openssl libssl-dev libelf-dev libdw-dev zlib1g-dev libzstd-dev
 		liblz4-dev liblzo2-dev libncurses-dev dwarves rsync cpio kmod
@@ -315,7 +315,7 @@ dependency_packages_debian() {
 
 dependency_packages_fedora() {
 	dependency_packages=(
-		gcc gcc-c++ make binutils bc bison flex pkgconf-pkg-config perl python3
+		gcc gcc-c++ make binutils bc bison flex gawk pkgconf-pkg-config perl python3
 		tar xz gzip bzip2 zstd lz4 lzop curl ca-certificates openssl openssl-devel
 		elfutils-libelf-devel elfutils-devel zlib-devel libzstd-devel lz4-devel
 		lzo-devel ncurses-devel dwarves rsync cpio kmod dracut grubby mokutil
@@ -327,7 +327,7 @@ dependency_packages_fedora() {
 
 dependency_packages_arch() {
 	dependency_packages=(
-		base-devel bc bison flex pkgconf perl python tar xz gzip bzip2 zstd lz4
+		base-devel bc bison flex gawk pkgconf perl python tar xz gzip bzip2 zstd lz4
 		lzo curl ca-certificates openssl libelf zlib ncurses pahole rsync cpio
 		kmod mkinitcpio grub mokutil
 	)
@@ -337,7 +337,7 @@ dependency_packages_arch() {
 
 dependency_packages_suse() {
 	dependency_packages=(
-		gcc gcc-c++ make binutils bc bison flex pkg-config perl python3 tar xz
+		gcc gcc-c++ make binutils bc bison flex gawk pkg-config perl python3 tar xz
 		gzip bzip2 zstd lz4 lzo curl ca-certificates openssl libopenssl-devel
 		libelf-devel libdw-devel zlib-devel libzstd-devel liblz4-devel
 		liblzo2-devel ncurses-devel dwarves rsync cpio kmod dracut grub2 mokutil
@@ -381,7 +381,7 @@ verify_build_requirements() {
 	local command header
 	local -a missing_commands missing_headers
 	local -a required_commands=(
-		bash make gcc ld as objcopy bc bison flex perl python3 tar xz curl
+		bash make gcc ld as objcopy bc bison flex awk gawk perl python3 tar xz curl
 		openssl pkg-config rsync cpio depmod sha256sum
 	)
 	local -a required_headers=(
