@@ -1,17 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${1:-}" == --terminal-child ]]; then
-	shift
-elif [[ ! -t 0 ]]; then
+terminal_child=0
+verbose=0
+launcher_args=("$@")
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--terminal-child) terminal_child=1; shift ;;
+		--verbose) verbose=1; shift ;;
+		-h|--help)
+			printf 'Usage: %q [--verbose]\n' "$0"
+			exit 0
+			;;
+		*) printf 'Unknown argument: %s\n' "$1" >&2; exit 2 ;;
+	esac
+done
+
+if (( ! terminal_child )) && [[ ! -t 0 ]]; then
 	if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v konsole >/dev/null; then
-		exec konsole -e bash "$0" --terminal-child
+		exec konsole -e bash "$0" --terminal-child "${launcher_args[@]}"
 	elif [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v gnome-terminal >/dev/null; then
-		exec gnome-terminal --wait -- bash "$0" --terminal-child
+		exec gnome-terminal --wait -- bash "$0" --terminal-child "${launcher_args[@]}"
 	elif [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v x-terminal-emulator >/dev/null; then
-		exec x-terminal-emulator -e bash "$0" --terminal-child
+		exec x-terminal-emulator -e bash "$0" --terminal-child "${launcher_args[@]}"
 	else
-		printf 'Open a terminal and run:\n  %q\n' "$0" >&2
+		printf 'Open a terminal and run:\n  %q' "$0" >&2
+		(( verbose )) && printf ' --verbose' >&2
+		printf '\n' >&2
 		exit 1
 	fi
 fi
@@ -23,24 +38,53 @@ legacy_suffix=t14ps2quirk1
 log_dir="$project_dir/logs"
 mkdir -p "$log_dir"
 log_file="$log_dir/$(date +%Y%m%d-%H%M%S-%N)-touchpad-patcher.log"
-active_log="$log_file.in-progress"
-exec > >(tee -a "$active_log") 2>&1
+touch "$log_file"
+
+detail() {
+	printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >>"$log_file"
+	if (( verbose )); then printf '[detail] %s\n' "$*"; fi
+}
+
+run_logged() {
+	local status command
+	printf -v command '%q ' "$@"
+	detail "+ ${command% }"
+	if (( verbose )); then
+		set +e
+		"$@" > >(tee -a "$log_file") 2> >(tee -a "$log_file" >&2)
+		status=$?
+		set -e
+	else
+		set +e
+		"$@" >>"$log_file" 2>&1
+		status=$?
+		set -e
+	fi
+	detail "exit $status: ${command% }"
+	return "$status"
+}
 
 sudo_keeper=
 cleanup_keeper() {
 	[[ -z "$sudo_keeper" ]] || kill "$sudo_keeper" 2>/dev/null || true
 }
 
+press_to_close() {
+	printf '\n%s\n' "$1"
+	if [[ -t 0 ]]; then
+		printf 'Press any key to close...'
+		IFS= read -r -n 1 -s _ || true
+		printf '\n'
+	fi
+}
+
 handle_exit() {
-	status=$?
+	local status=$?
 	cleanup_keeper
 	if (( status != 0 )); then
-		if [[ -f "$active_log" ]]; then
-			mv -f -- "$active_log" "$log_file"
-		fi
 		printf '\nTouchpad Patcher stopped with an error (code %s).\n' "$status" >&2
-		printf 'Nothing removed your stock distribution kernels. They remain available as fallbacks.\n' >&2
-		printf 'Diagnostic log: %s\n' "$log_file" >&2
+		printf 'Stock distribution kernels were not removed and remain available as fallbacks.\n' >&2
+		printf 'Full diagnostic log: %s\n' "$log_file" >&2
 		if [[ -t 0 ]]; then
 			printf 'Press any key to close...'
 			IFS= read -r -n 1 -s _ || true
@@ -51,101 +95,18 @@ handle_exit() {
 }
 trap handle_exit EXIT
 
-[[ -x "$installer" ]] || {
-	printf 'Required installer is missing or not executable:\n  %s\n' "$installer" >&2
-	exit 1
-}
+[[ -x "$installer" ]] || { printf 'Required installer is missing or not executable:\n  %s\n' "$installer" >&2; exit 1; }
 
-printf '%s\n' 'ThinkPad T14 Gen 1 LEN2068 Touchpad Patcher'
-printf '%s\n' 'This installs a distinctly named SynPS/2 policy kernel and preserves all stock kernels.'
-printf '\nAdministrator authentication is required once for kernel installation.\n'
+printf '%s\n\n' 'ThinkPad T14 Gen 1 Touchpad Patcher'
+printf '%s\n' 'Administrator authentication is required for dependency and kernel installation.'
 sudo -v
+detail 'sudo authentication established'
 
-show_compatibility() {
-	local distro_id distro_like pretty adapter likelihood
-	local -a required missing
-
-	if [[ -r /etc/os-release ]]; then
-		# shellcheck disable=SC1091
-		. /etc/os-release
-		distro_id=${ID:-unknown}
-		distro_like=${ID_LIKE:-}
-		pretty=${PRETTY_NAME:-$distro_id}
-	else
-		distro_id=unknown
-		distro_like=
-		pretty='Unknown Linux distribution'
-	fi
-
-	case " $distro_id $distro_like " in
-		*fedora*|*rhel*)
-			adapter='Fedora/RHEL'
-			likelihood='HIGH — Fedora is validated end-to-end; compatible derivatives use the same adapter.'
-			required=(dracut kernel-install grubby)
-			;;
-		*debian*|*ubuntu*)
-			adapter='Debian/Ubuntu (includes Linux Mint)'
-			likelihood='GOOD — the adapter is implemented, but has not yet been physically validated by this project.'
-			required=(update-initramfs update-grub)
-			;;
-		*arch*)
-			adapter='Arch Linux'
-			likelihood='GOOD — the adapter is implemented, but has not yet been physically validated by this project.'
-			required=(mkinitcpio)
-			;;
-		*suse*|*opensuse*)
-			adapter='openSUSE'
-			likelihood='GOOD — the adapter is implemented, but has not yet been physically validated by this project.'
-			required=(dracut grub2-mkconfig)
-			;;
-		*)
-			adapter='Generic systemd Linux'
-			likelihood='EXPERIMENTAL — installation can proceed only with compatible kernel-install and dracut tooling.'
-			required=(kernel-install dracut)
-			;;
-	esac
-
-	missing=()
-	for command in "${required[@]}"; do
-		command -v "$command" >/dev/null || missing+=("$command")
-	done
-
-	printf '\nDistribution compatibility assessment\n'
-	printf '  Detected:   %s\n' "$pretty"
-	printf '  Adapter:    %s\n' "$adapter"
-	printf '  Likelihood: %s\n' "$likelihood"
-	printf '  Kernel:     stable upstream Linux 4.x+ on x86-64 with supported Synaptics source layout\n'
-	if (( ${#missing[@]} )); then
-		printf '  Warning:    missing adapter tool(s): %s\n' "${missing[*]}"
-		printf '              Automatic safety checks will stop unless these are installed.\n'
-	else
-		printf '  Tooling:    required adapter commands detected\n'
-	fi
-}
-
-show_compatibility
-
-# Keep the sudo timestamp alive during a potentially long compilation so the
-# user is not prompted again near the end of the build.
 while true; do
 	sudo -n true 2>/dev/null || exit
 	sleep 50
 done &
 sudo_keeper=$!
-
-press_to_close() {
-	local message=$1
-	printf '\n%s\n' "$message"
-	if [[ -t 0 ]]; then
-		printf 'Press any key to close...'
-		IFS= read -r -n 1 -s _
-		printf '\n'
-	fi
-}
-
-discard_success_log() {
-	rm -f -- "$active_log" "$log_file"
-}
 
 running=$(uname -r)
 if [[ "$running" =~ ^([0-9]+\.[0-9]+\.[0-9]+) ]]; then
@@ -157,56 +118,47 @@ fi
 target_release="$base_version-$suffix"
 target_kernel="/boot/vmlinuz-$target_release"
 target_modules="/lib/modules/$target_release"
-
 legacy_release="$base_version-$legacy_suffix"
-legacy_kernel="/boot/vmlinuz-$legacy_release"
-legacy_modules="/lib/modules/$legacy_release"
 
-if [[ ! -f "$target_kernel" || ! -d "$target_modules" ]]; then
-	if [[ -f "$legacy_kernel" && -d "$legacy_modules" ]]; then
-		target_release=$legacy_release
-		target_kernel=$legacy_kernel
-		target_modules=$legacy_modules
-		printf '\nAn existing kernel containing the same touchpad patch was detected.\n'
-		printf 'Future builds use the clearer suffix: %s\n' "$suffix"
-	fi
+if [[ (! -f "$target_kernel" || ! -d "$target_modules") && -f "/boot/vmlinuz-$legacy_release" && -d "/lib/modules/$legacy_release" ]]; then
+	target_release=$legacy_release
+	target_kernel="/boot/vmlinuz-$legacy_release"
+	target_modules="/lib/modules/$legacy_release"
+	detail "recognized legacy patched kernel $legacy_release"
 fi
 
+installer_args=(--yes --kernel "$base_version" --log-file "$log_file")
+(( verbose )) && installer_args+=(--verbose)
+
 if [[ -f "$target_kernel" && -d "$target_modules" ]]; then
-	printf '\nPatch already completed for kernel series %s.\n' "$base_version"
-	printf 'Installed kernel: %s\n' "$target_release"
-
+	printf '✓ Patched kernel already installed: %s\n' "$target_release"
 	if command -v grubby >/dev/null; then
-		default_kernel=$(sudo grubby --default-kernel 2>/dev/null || true)
+		default_kernel=$(sudo grubby --default-kernel 2>>"$log_file" || true)
 		if [[ "$default_kernel" != "$target_kernel" ]]; then
-			printf 'Restoring the patched kernel as the default boot entry...\n'
-			sudo grubby --set-default "$target_kernel"
+			run_logged sudo grubby --set-default "$target_kernel" || { printf 'Could not select the installed patched kernel as the default.\n' >&2; exit 1; }
+			[[ "$(sudo grubby --default-kernel 2>>"$log_file")" == "$target_kernel" ]] || { printf 'Bootloader default verification failed.\n' >&2; exit 1; }
+			printf '✓ Patched kernel selected for next boot\n'
 		fi
-		printf 'Default kernel: %s\n' "$(sudo grubby --default-kernel 2>/dev/null || printf unknown)"
 	fi
-
 	if [[ "$running" == "$target_release" ]]; then
-		"$installer" verify
+		verify_args=(--log-file "$log_file")
+		(( verbose )) && verify_args+=(--verbose)
+		"$installer" "${verify_args[@]}" verify
 	else
-		printf 'Reboot and select %s if it is not selected automatically.\n' "$target_release"
+		printf 'Reboot into %s to activate and verify the touchpad patch.\n' "$target_release"
 	fi
-
 	cleanup_keeper
 	trap - EXIT
-	discard_success_log
+	printf 'Diagnostic log: %s\n' "$log_file"
 	press_to_close 'Patch already completed successfully.'
 	exit 0
 fi
 
-printf '\nNo completed patch was found for the current %s kernel series.\n' "$base_version"
-printf 'Running guarded hardware and build checks, then building %s...\n\n' "$target_release"
-"$installer" --yes --kernel "$base_version" all
+"$installer" "${installer_args[@]}" all
 
-printf '\nInstallation completed successfully.\n'
-printf 'Reboot into %s, then run this launcher again to verify it.\n' "$target_release"
+printf '\nInstallation complete. Reboot to use %s.\n' "$target_release"
+printf 'Full diagnostic log: %s\n' "$log_file"
 
 cleanup_keeper
 trap - EXIT
-discard_success_log
-press_to_close 'Touchpad patch successful.'
-exit 0
+press_to_close 'Touchpad patch installation successful.'
