@@ -21,13 +21,15 @@ Clone the Fedora-validated `v1.0.0` release on the target machine, then run the
 executable top-level launcher:
 
 ```bash
-git clone --branch v1.0.0 --depth 1 https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
+git clone --no-checkout https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
 cd "Touchpad Patcher"
+git switch --create stable-v1.0.0 v1.0.0
 ./Run\ Touchpad\ Patcher.sh
 ```
 
-This command checks out the known-good release directly; no separate
-`git checkout` step is required. Other published versions are available from
+This sequence never checks out `main`. It creates a normal local branch from
+the known-good `v1.0.0` release, avoiding detached-HEAD warnings. Other
+published versions are available from
 [GitHub Releases](https://github.com/RavenWearne/thinkpad-synaptics-patch/releases).
 
 The following command is only for contributors who intentionally want the
