@@ -17,21 +17,24 @@ a conservative `kernel-install` fallback.
 
 ### Clone and run
 
-Clone the repository on the target machine, then run the executable
-top-level launcher:
+Clone the Fedora-validated `v1.0.0` release on the target machine, then run the
+executable top-level launcher:
 
 ```bash
-git clone https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
+git clone --branch v1.0.0 --depth 1 https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
 cd "Touchpad Patcher"
 ./Run\ Touchpad\ Patcher.sh
 ```
 
-`main` contains the latest development version. For a known-good release,
-select a version from [GitHub Releases](https://github.com/RavenWearne/thinkpad-synaptics-patch/releases)
-and check out its tag before running the launcher. For example:
+This command checks out the known-good release directly; no separate
+`git checkout` step is required. Other published versions are available from
+[GitHub Releases](https://github.com/RavenWearne/thinkpad-synaptics-patch/releases).
+
+The following command is only for contributors who intentionally want the
+latest unreleased development version from `main`:
 
 ```bash
-git checkout v1.0.0
+git clone https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher Development"
 ```
 
 It requests sudo once, keeps that authentication alive during compilation,
