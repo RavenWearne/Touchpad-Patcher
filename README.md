@@ -17,18 +17,18 @@ a conservative `kernel-install` fallback.
 
 ### Clone and run
 
-Clone the current stable `v1.0.1` release on the target machine, then run the
+Clone the current stable `v1.0.2` release on the target machine, then run the
 executable top-level launcher:
 
 ```bash
 git clone --no-checkout https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
 cd "Touchpad Patcher"
-git switch --create stable-v1.0.1 v1.0.1
+git switch --create stable-v1.0.2 v1.0.2
 ./Run\ Touchpad\ Patcher.sh
 ```
 
 This sequence never checks out `main`. It creates a normal local branch from
-the known-good `v1.0.1` release, avoiding detached-HEAD warnings. Other
+the known-good `v1.0.2` release, avoiding detached-HEAD warnings. Other
 published versions are available from
 [GitHub Releases](https://github.com/RavenWearne/thinkpad-synaptics-patch/releases).
 
@@ -57,6 +57,12 @@ already-patched outcomes discard that capture and do not mention logging.
 Failures retain the capture as a timestamped file in `logs/`, display its exact
 path and wait for a keypress, making the report straightforward to return for
 investigation.
+
+On Debian, Ubuntu and Linux Mint, the guarded installer checks the standard
+kernel-build package set and installs any missing prerequisites through
+`apt-get` before downloading source. This includes `build-essential`, `bc`,
+`bison`, `flex`, `libssl-dev`, `libelf-dev` and `dwarves`. Package installation
+occurs only after Lenovo/LEN2068 hardware validation succeeds.
 
 Long builds report each major phase and show a spinner with elapsed time during
 interactive compilation. Non-interactive runs emit an elapsed-time heartbeat
@@ -107,6 +113,12 @@ The automated build supports stable upstream Linux 4.x and newer on x86-64
 when the source retains the Synaptics `smbus_pnp_ids` structure. This is tested
 by inspecting the supplied source, not by hard-coding one kernel release. An
 unknown driver layout is refused rather than modified heuristically.
+
+Distribution kernels commonly report an initial stable release as `X.Y.0`
+(for example, `6.14.0-37-generic`), while kernel.org names that source archive
+`linux-X.Y.tar.xz`. The installer normalizes only the source archive and
+directory name from `X.Y.0` to `X.Y`; the installed custom kernel retains its
+full `X.Y.0-...` release identity.
 
 Kernel updates do not inherit an out-of-tree source change. Re-run the tool for
 the desired new upstream version, keep at least one stock kernel as fallback,

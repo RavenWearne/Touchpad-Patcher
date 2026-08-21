@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=3
+tool_version=4
 local_suffix=t14-len2068-touchpad-patch
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 patcher="$project_dir/scripts/t14-ps2-patch-source.sh"
@@ -123,6 +123,10 @@ derive_version() {
 	local major=${kernel_version%%.*}
 	(( major >= 4 )) || die "supported kernel source families begin at Linux 4.x"
 	[[ "$(uname -m)" == x86_64 ]] || die "the automated installer currently supports x86-64 kernels"
+	source_version=$kernel_version
+	if [[ "$kernel_version" =~ ^([0-9]+\.[0-9]+)\.0$ ]]; then
+		source_version=${BASH_REMATCH[1]}
+	fi
 }
 
 find_config() {
@@ -144,10 +148,44 @@ check_tools() {
 	[[ -e /usr/include/elf.h ]] || die "ELF development headers are missing"
 }
 
+ensure_debian_dependencies() {
+	local package
+	local -a packages missing_packages
+	packages=(build-essential bc bison flex libssl-dev libelf-dev dwarves)
+	missing_packages=()
+	need apt-get
+	need dpkg-query
+	for package in "${packages[@]}"; do
+		if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -qx 'install ok installed'; then
+			missing_packages+=("$package")
+		fi
+	done
+	if (( ! ${#missing_packages[@]} )); then
+		log "Debian/Ubuntu build dependencies are already installed"
+		return
+	fi
+	log "missing Debian/Ubuntu build packages: ${missing_packages[*]}"
+	if (( dry_run )); then
+		log "dry run: would refresh package metadata and install the missing packages"
+		return
+	fi
+	log "refreshing APT package metadata"
+	sudo apt-get update
+	log "installing required kernel-build packages"
+	sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing_packages[@]}"
+}
+
+ensure_dependencies() {
+	case "$adapter" in
+		debian) ensure_debian_dependencies ;;
+	esac
+}
+
 preflight() {
 	detect_platform
 	hardware_guard
 	derive_version
+	ensure_dependencies
 	find_config
 	check_tools
 	local available_kb
@@ -156,21 +194,24 @@ preflight() {
 	if command -v mokutil >/dev/null && mokutil --sb-state 2>/dev/null | grep -qi enabled; then
 		die "Secure Boot is enabled. Enrol a signing key or disable Secure Boot before installing an unsigned custom kernel"
 	fi
-	log "adapter=$adapter kernel=$kernel_version config=$config_source work=$work_dir jobs=$jobs"
+	log "adapter=$adapter kernel=$kernel_version source=$source_version config=$config_source work=$work_dir jobs=$jobs"
 }
 
 prepare_source() {
 	if [[ -n "$source_dir" ]]; then
 		build_source=$source_dir
 	else
-		build_source="$work_dir/linux-$kernel_version"
-		archive="$work_dir/linux-$kernel_version.tar.xz"
+		build_source="$work_dir/linux-$source_version"
+		archive="$work_dir/linux-$source_version.tar.xz"
 		if [[ ! -d "$build_source" ]]; then
 			run mkdir -p "$work_dir"
-			log "downloading Linux $kernel_version source"
+			if [[ "$source_version" != "$kernel_version" ]]; then
+				log "kernel $kernel_version uses upstream source archive version $source_version"
+			fi
+			log "downloading Linux $source_version source"
 			run curl --fail --location --proto '=https' --tlsv1.2 \
-				-o "$archive" "https://cdn.kernel.org/pub/linux/kernel/v${kernel_version%%.*}.x/linux-$kernel_version.tar.xz"
-			log "extracting Linux $kernel_version source"
+				-o "$archive" "https://cdn.kernel.org/pub/linux/kernel/v${source_version%%.*}.x/linux-$source_version.tar.xz"
+			log "extracting Linux $source_version source"
 			run tar -C "$work_dir" -xf "$archive"
 		else
 			log "reusing existing source tree: $build_source"
