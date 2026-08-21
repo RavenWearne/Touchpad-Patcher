@@ -17,18 +17,18 @@ a conservative `kernel-install` fallback.
 
 ### Clone and run
 
-Clone the Fedora-validated `v1.0.0` release on the target machine, then run the
+Clone the current stable `v1.0.1` release on the target machine, then run the
 executable top-level launcher:
 
 ```bash
 git clone --no-checkout https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
 cd "Touchpad Patcher"
-git switch --create stable-v1.0.0 v1.0.0
+git switch --create stable-v1.0.1 v1.0.1
 ./Run\ Touchpad\ Patcher.sh
 ```
 
 This sequence never checks out `main`. It creates a normal local branch from
-the known-good `v1.0.0` release, avoiding detached-HEAD warnings. Other
+the known-good `v1.0.1` release, avoiding detached-HEAD warnings. Other
 published versions are available from
 [GitHub Releases](https://github.com/RavenWearne/thinkpad-synaptics-patch/releases).
 
@@ -57,6 +57,12 @@ already-patched outcomes discard that capture and do not mention logging.
 Failures retain the capture as a timestamped file in `logs/`, display its exact
 path and wait for a keypress, making the report straightforward to return for
 investigation.
+
+Long builds report each major phase and show a spinner with elapsed time during
+interactive compilation. Non-interactive runs emit an elapsed-time heartbeat
+every 30 seconds. Complete compiler output is retained in a timestamped
+`logs/*-kernel-build.log` file on both success and failure; no unreliable
+percentage estimate is shown.
 
 To build and install after reviewing the detected hardware, source version,
 kernel configuration and boot tooling:

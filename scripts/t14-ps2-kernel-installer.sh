@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=2
+tool_version=3
 local_suffix=t14-len2068-touchpad-patch
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 patcher="$project_dir/scripts/t14-ps2-patch-source.sh"
@@ -37,6 +37,7 @@ EOF
 }
 
 log() { printf '[t14-patch] %s\n' "$*"; }
+phase() { printf '\n[t14-patch] === %s ===\n' "$*"; }
 die() { printf '[t14-patch] ERROR: %s\n' "$*" >&2; exit 1; }
 run() { log "+ $*"; (( dry_run )) || "$@"; }
 need() { command -v "$1" >/dev/null || die "required command not found: $1"; }
@@ -166,9 +167,13 @@ prepare_source() {
 		archive="$work_dir/linux-$kernel_version.tar.xz"
 		if [[ ! -d "$build_source" ]]; then
 			run mkdir -p "$work_dir"
+			log "downloading Linux $kernel_version source"
 			run curl --fail --location --proto '=https' --tlsv1.2 \
 				-o "$archive" "https://cdn.kernel.org/pub/linux/kernel/v${kernel_version%%.*}.x/linux-$kernel_version.tar.xz"
+			log "extracting Linux $kernel_version source"
 			run tar -C "$work_dir" -xf "$archive"
+		else
+			log "reusing existing source tree: $build_source"
 		fi
 	fi
 	(( dry_run )) && return
@@ -194,10 +199,62 @@ prepare_source() {
 	make -C "$build_source" olddefconfig
 }
 
+format_elapsed() {
+	local total=$1
+	printf '%02d:%02d:%02d' "$(( total / 3600 ))" "$(( total % 3600 / 60 ))" "$(( total % 60 ))"
+}
+
+compile_kernel() {
+	local build_pid build_status elapsed frame spinner tick start
+	local log_dir="$project_dir/logs"
+	local build_log="$log_dir/$(date +%Y%m%d-%H%M%S)-kernel-build.log"
+	mkdir -p "$log_dir"
+	log "full compiler output: $build_log"
+	make -C "$build_source" -j "$jobs" >"$build_log" 2>&1 &
+	build_pid=$!
+	start=$SECONDS
+	spinner='|/-\'
+	tick=0
+	if [[ -t 0 ]]; then
+		while kill -0 "$build_pid" 2>/dev/null; do
+			frame=${spinner:tick%4:1}
+			elapsed=$(format_elapsed "$(( SECONDS - start ))")
+			printf '\r[t14-patch] %s compiling kernel — elapsed %s' "$frame" "$elapsed"
+			tick=$(( tick + 1 ))
+			sleep 1
+		done
+		printf '\r\033[K'
+	else
+		while kill -0 "$build_pid" 2>/dev/null; do
+			sleep 1
+			tick=$(( tick + 1 ))
+			if (( tick % 30 == 0 )); then
+				elapsed=$(format_elapsed "$(( SECONDS - start ))")
+				log "kernel compilation still active — elapsed $elapsed"
+			fi
+		done
+	fi
+	if wait "$build_pid"; then
+		build_status=0
+	else
+		build_status=$?
+	fi
+	elapsed=$(format_elapsed "$(( SECONDS - start ))")
+	if (( build_status != 0 )); then
+		printf '[t14-patch] Last 40 compiler-output lines:\n' >&2
+		tail -n 40 "$build_log" >&2 || true
+		die "kernel compilation failed after $elapsed (status $build_status); full output: $build_log"
+	fi
+	log "kernel compilation completed in $elapsed"
+	log "compiler output retained at $build_log"
+}
+
 build_kernel() {
+	phase "Source download, patch and configuration"
 	prepare_source
 	(( dry_run )) && { log "would patch and build $build_source"; return; }
-	run make -C "$build_source" -j "$jobs"
+	phase "Kernel and module compilation"
+	compile_kernel
 	built_release=$(make -s -C "$build_source" kernelrelease)
 	[[ "$built_release" == *"-$local_suffix" ]] || die "unexpected kernel release: $built_release"
 	[[ -f "$build_source/arch/x86/boot/bzImage" ]] || die "x86 kernel image was not produced"
@@ -245,11 +302,14 @@ install_kernel() {
 	detect_platform
 	load_build_state
 	[[ "$(uname -r)" != "$built_release" ]] || die "refusing to overwrite the running kernel"
+	phase "Kernel and module installation"
 	run sudo make -C "$build_source" modules_install INSTALL_MOD_STRIP=1
 	run sudo install -m 0644 "$build_source/arch/x86/boot/bzImage" "/boot/vmlinuz-$built_release"
 	run sudo install -m 0644 "$build_source/System.map" "/boot/System.map-$built_release"
 	run sudo install -m 0644 "$build_source/.config" "/boot/config-$built_release"
+	phase "Initramfs generation"
 	generate_initramfs
+	phase "Bootloader configuration"
 	refresh_bootloader
 	log "installed $built_release; stock kernels were not removed"
 	if (( ! keep_build )) && [[ "$build_source" == "$work_dir"/* ]]; then
@@ -283,10 +343,10 @@ uninstall_kernel() {
 }
 
 case "$action" in
-	preflight) preflight ;;
-	build) preflight; build_kernel ;;
+	preflight) phase "Safety and compatibility checks"; preflight ;;
+	build) phase "Safety and compatibility checks"; preflight; build_kernel ;;
 	install) detect_platform; install_kernel ;;
-	all) preflight; build_kernel; install_kernel ;;
-	verify) verify_kernel ;;
+	all) phase "Safety and compatibility checks"; preflight; build_kernel; install_kernel ;;
+	verify) phase "Post-reboot SynPS/2 verification"; verify_kernel ;;
 	uninstall) detect_platform; uninstall_kernel ;;
 esac
