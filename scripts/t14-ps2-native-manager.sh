@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=3.0.1
+tool_version=3.0.2
 token=psmouse.synaptics_intertouch=0
 conflict=psmouse.synaptics_intertouch=1
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -169,7 +169,17 @@ read_active_efi_entry() {
 	entry=${entry# }
 	active_efi_label=${entry%%HD(*}
 	active_efi_label=${active_efi_label% }
-	if [[ "$line" =~ $file_pattern ]]; then active_efi_loader_path=${BASH_REMATCH[1]}; else die "UEFI BootCurrent $current does not expose an EFI loader path"; fi
+	if [[ "$line" =~ $file_pattern ]]; then
+		active_efi_loader_path=${BASH_REMATCH[1]}
+	elif [[ "$line" == *')/\EFI\'* ]]; then
+		# efibootmgr may render a filepath device node directly after HD(...)/
+		# instead of wrapping it as File(...).
+		active_efi_loader_path=${line#*)/}
+		[[ "${active_efi_loader_path,,}" == \\efi\\*.efi ]] || \
+			die "UEFI BootCurrent $current exposes an invalid direct EFI loader path"
+	else
+		die "UEFI BootCurrent $current does not expose an EFI loader path"
+	fi
 	if [[ "$line" =~ $hd_pattern ]]; then active_efi_partuuid=${BASH_REMATCH[1]}; else die "UEFI BootCurrent $current does not expose a GPT EFI partition UUID"; fi
 	active_efi_loader_fs=${active_efi_loader_path//\\//}
 	active_efi_loader_compare=${active_efi_loader_fs,,}

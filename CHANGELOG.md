@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.0.2
+
+- Accept both standard `efibootmgr -v` EFI filepath renderings:
+  `HD(...)/File(\\EFI\\...\\loader.efi)` and the Fedora-observed direct form
+  `HD(...)/\\EFI\\...\\loader.efi`.
+- Keep strict GPT PARTUUID, EFI namespace, recognised-loader, exact path-case,
+  privileged ESP access, and downstream boot-chain validation.
+- Update the permanent Fedora-GRUB-booting-Mint fixture to reproduce the direct
+  filepath form emitted on the physical Fedora installation.
+
 ## 3.0.1
 
 - Recognise and runtime-verify a native fix when the running installation is

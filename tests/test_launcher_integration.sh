@@ -77,7 +77,7 @@ enable_foreign_grub() {
 		'configfile $prefix/grub.cfg' >"$fixture_dir/boot/efi/EFI/$current_vendor/grub.cfg"
 	printf '%s\n' \
 		'BootCurrent: 0001' \
-		"Boot0001* $current_label HD(1,GPT,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,0x800,0x100000)/File(\\EFI\\$current_vendor\\shimx64.efi)" \
+		"Boot0001* $current_label HD(1,GPT,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,0x800,0x100000)/\\EFI\\$current_vendor\\shimx64.efi" \
 		>"$fixture_dir/efibootmgr.out"
 	cat >"$fake_bin/efibootmgr" <<'SH'
 #!/usr/bin/env bash
