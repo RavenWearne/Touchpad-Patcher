@@ -17,6 +17,7 @@
 scripts/*
 !scripts/t14-ps2-kernel-arg.py
 !scripts/t14-ps2-grub-entry.py
+!scripts/t14-ps2-machine-inventory.py
 !scripts/t14-ps2-kernel-installer.sh
 !scripts/t14-ps2-native-manager.sh
 !scripts/t14-ps2-patch-source.sh
@@ -25,5 +26,6 @@ tests/*
 !tests/test_kernel_arg.py
 !tests/test_dependencies.py
 !tests/test_grub_entry.py
+!tests/test_machine_inventory.py
 !tests/test_launcher_integration.sh
 !tests/test_native_manager.sh

@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.0.0
+
+- Add a machine inventory covering the authoritative GRUB environment,
+  os-prober targets, and Fedora BLS entries instead of stopping at the current
+  operating system.
+- Track kernel remediation, native configuration, and runtime evidence per
+  logical installation; non-running systems remain pending verification.
+- Treat a LEN2068-patched kernel and `psmouse.synaptics_intertouch=0` as
+  compatible layers, preserve existing kernels, and continue inspection when
+  the current Fedora kernel is already patched.
+- Identify a running Fedora BLS target even when it has no literal `menuentry`
+  in generated `grub.cfg`.
+- Keep Fedora `grubby` changes scoped to Fedora/BLS kernels and never claim
+  they also change generated Mint/os-prober entries.
+- Preserve v2.0.8 BootCurrent tracing, privileged ESP access, EFI path case,
+  read-only temporary mounts, equivalent-entry collapsing, recovery exclusion,
+  stale-state reconciliation, rollback, and guarded fallback semantics.
+- Add machine-level regressions for Fedora BLS plus Mint os-prober, equivalent
+  and materially different entries, recovery exclusion, exact argument
+  matching, and patched-kernel/native coexistence.
+
 ## 2.0.8
 
 - Collapse generic and version-specific GRUB menu entries into one logical

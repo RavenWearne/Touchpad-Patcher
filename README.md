@@ -1,19 +1,20 @@
 # ThinkPad T14 Gen 1 LEN2068 Touchpad Patcher
 
 Keep the Synaptics TM3471-020 / LEN2068 touchpad on its reliable SynPS/2 path.
-Version 2 prefers the stock distribution kernel by adding the supported Linux
+Version 3 is machine-aware: it inventories the Linux installations represented
+by the authoritative boot environment. It prefers the stock kernel by adding
 parameter `psmouse.synaptics_intertouch=0`. It builds a separate source-patched
 kernel only when that native route is unavailable or proves ineffective.
 
 Stock distribution kernels are never removed by installation. The same
 launcher verifies, retains, and rolls back either method.
 
-## Install the stable v2 release
+## Install the stable v3 release
 
 ```bash
 git clone --no-checkout https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
 cd "Touchpad Patcher"
-git switch --create stable-v2.0.8 v2.0.8
+git switch --create stable-v3.0.0 v3.0.0
 ./Run\ Touchpad\ Patcher.sh
 ```
 
@@ -22,14 +23,21 @@ under `logs/`. Repository, cache, log, and configuration paths containing
 spaces are supported; the documented `Touchpad Patcher` directory is covered
 by the integration tests.
 
-## How version 2 works
+## How version 3 works
 
 On every launch the patcher positively identifies a Lenovo ThinkPad T14 Gen 1
 and dynamically finds `LEN2068` in the readable serio firmware IDs. It then
 inspects the running kernel, current kernel command line, input devices, active
 boot chain, existing patcher state, and installed custom kernels. Saved state is
 metadata only: the patcher reconciles it against the real persistent boot
-configuration before treating a native fix as configured.
+configuration before treating a native fix as configured. It also inventories
+normal GRUB, os-prober, and Fedora BLS targets using root UUIDs, kernels,
+arguments, menu IDs, and live current-system evidence.
+
+Remediation is tracked per installation. A Fedora kernel can be
+`kernel-patched` while a Mint os-prober target remains `unconfigured`; a
+patched kernel and `psmouse.synaptics_intertouch=0` are compatible. Finding a
+patched running kernel records that state and continues machine inspection.
 
 The normal lifecycle is:
 
@@ -38,13 +46,15 @@ The normal lifecycle is:
    On UEFI GRUB systems this includes `BootCurrent`, the EFI loader and active
    EFI system partition, the GRUB stub's filesystem UUID/prefix, and the unique
    generated menu entry matching the running root UUID and kernel.
-3. Preserve all unrelated arguments and add only
+3. Enumerate logical Linux targets, collapse equivalent normal entries, and
+   exclude recovery/rescue entries during a normal boot.
+4. Preserve all unrelated arguments and add only
    `psmouse.synaptics_intertouch=0`.
-4. Regenerate and inspect the boot configuration.
-5. Reboot normally and run the same launcher again.
-6. Verify that the parameter reached `/proc/cmdline`, SynPS/2 is registered,
+5. Regenerate and inspect the authoritative boot configuration.
+6. Reboot the configured installation and run the same launcher again.
+7. Verify that the parameter reached `/proc/cmdline`, SynPS/2 is registered,
    and the native TM3471 RMI4 input device is absent.
-7. Keep the verified fix by pressing Enter, or choose rollback in the same
+8. Keep the verified fix by pressing Enter, or choose rollback in the same
    launcher.
 
 If the kernel lacks the parameter, the launcher offers the existing guarded
@@ -75,10 +85,12 @@ kernel, effective arguments, and menu ID evidence; recovery entries are ignored
 unless the current boot is itself a recovery boot. Fedora `saved_entry`/BLS
 state is reported separately from the Mint entry that produced the running
 system. Because an os-prober menu entry is generated output owned by the other
-installation, the patcher does not edit it or Mint's inactive GRUB settings; it
-stops with instructions to configure or regenerate the bootloader from its
-owning OS. Ambiguous chains and entries also stop safely and never trigger an
-automatic kernel build.
+installation, the patcher never edits it or Mint's inactive GRUB settings.
+Fedora's supported `grubby` operation is scoped to Fedora/BLS kernels; it is
+not misreported as changing foreign os-prober entries. Those targets remain
+separate remediation work, with runtime verification pending until each OS is
+booted. Ambiguous chains and entries stop safely and never trigger an automatic
+kernel build.
 
 ## Native rollback
 
@@ -136,10 +148,11 @@ The patcher deliberately:
 
 ## Advanced commands
 
-The native manager can be audited directly:
+The native manager and machine inventory can be audited directly:
 
 ```bash
 ./scripts/t14-ps2-native-manager.sh preflight
+./scripts/t14-ps2-native-manager.sh inventory
 ./scripts/t14-ps2-native-manager.sh status
 ./scripts/t14-ps2-native-manager.sh verify
 ./scripts/t14-ps2-native-manager.sh rollback
@@ -161,7 +174,7 @@ The source-only operation remains narrow and idempotent:
 
 ## Testing and reports
 
-Fedora's custom-kernel route has been validated end to end. Version 2's native
+Fedora's custom-kernel route has been validated end to end. Version 3's native
 boot-manager adapters are structurally tested but need broader physical testing
 across distributions. Submit sanitized results using the repository's
 [distribution test report](https://github.com/RavenWearne/thinkpad-synaptics-patch/issues/new?template=distro-test.yml).
@@ -169,7 +182,7 @@ across distributions. Submit sanitized results using the repository's
 Maintainers can run the regression suite with:
 
 ```bash
-python3 -m unittest -v tests/test_kernel_arg.py tests/test_dependencies.py
+python3 -m unittest -v tests/test_kernel_arg.py tests/test_dependencies.py tests/test_grub_entry.py tests/test_machine_inventory.py
 ./tests/test_native_manager.sh
 ./tests/test_launcher_integration.sh
 ```

@@ -53,7 +53,11 @@ run_logged() {
 }
 
 sudo_keeper=
-cleanup_keeper() { [[ -z "$sudo_keeper" ]] || kill "$sudo_keeper" 2>/dev/null || true; }
+inventory_file=
+cleanup_keeper() {
+	[[ -z "$sudo_keeper" ]] || kill "$sudo_keeper" 2>/dev/null || true
+	[[ -z "$inventory_file" ]] || rm -f -- "$inventory_file"
+}
 finish() {
 	cleanup_keeper
 	trap - EXIT
@@ -84,7 +88,7 @@ ask_choice() {
 }
 
 [[ -x "$installer" && -x "$native_manager" ]] || { printf 'Required patcher components are missing or not executable.\n' >&2; exit 1; }
-printf '%s\n' 'ThinkPad T14 Gen 1 LEN2068 Touchpad Patcher v2.0.8'
+printf '%s\n' 'ThinkPad T14 Gen 1 LEN2068 Touchpad Patcher v3.0.0'
 printf '%s\n\n' 'The stock-kernel boot parameter is preferred; a custom kernel is the guarded fallback.'
 if (( ! testing )); then
 	printf '%s\n' 'Administrator authentication is required to manage boot configuration or kernels.'
@@ -102,24 +106,52 @@ else
 	running=$(uname -r)
 fi
 
+current_kernel_patched=0
 if [[ "$running" == *"-$suffix" || "$running" == *"-$legacy_suffix" ]]; then
+	current_kernel_patched=1
 	rm -f -- "${XDG_CACHE_HOME:-$HOME/.cache}/t14-len2068-touchpad-patch/.custom-pending-verification"
-	printf '\nCustom-kernel method detected. Verifying...\n'
+fi
+
+printf '\nInspecting the authoritative boot environment and its Linux installations...\n'
+inventory_file=$(mktemp --tmpdir "t14-touchpad-machine-inventory.XXXXXX.json")
+if ! "$native_manager" "${native_args[@]}" inventory >"$inventory_file" 2> >(tee -a "$log_file" >&2); then
+	printf 'Unable to build a safe machine-level boot inventory. No configuration was changed.\n' >&2
+	exit 1
+fi
+python3 - "$inventory_file" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+print("\nDetected Linux installations:\n")
+for item in data["installations"]:
+    print(item["distribution"])
+    print(f"  Kernel: {item['kernel']}")
+    print(f"  Boot method: {item['boot_method']}")
+    if item["kernel_patched"]:
+        print("  ✓ LEN2068 kernel-level remediation detected")
+    if item["native_configured"]:
+        print("  ✓ Native parameter configured")
+    if not item["kernel_patched"] and not item["native_configured"]:
+        print("  ⚠ Native touchpad remediation required")
+    if not item["current"]:
+        print("  ○ Runtime verification pending")
+    print()
+owner = data.get("bootloader_owner")
+if owner:
+    print(f"Authoritative bootloader: {owner} GRUB")
+PY
+rm -f -- "$inventory_file"
+inventory_file=
+
+if (( current_kernel_patched )); then
+	printf '\nThe running Fedora/custom kernel is already patched; it has been preserved.\n'
+	printf 'The kernel patch and %s are compatible, so machine inspection will continue.\n' 'psmouse.synaptics_intertouch=0'
+	printf 'Verifying the current kernel-level remediation with live touchpad evidence...\n'
 	if "$installer" "${installer_common[@]}" verify; then
-		choice=$(ask_choice 'Press Enter to keep the custom kernel, or R to begin rollback: ' keep)
+		printf '✓ Current patched-kernel remediation runtime verified.\n'
 	else
-		printf '\nCustom-kernel verification failed.\n' >&2
-		choice=$(ask_choice 'Press R to return to a stock kernel, or Enter to close without changing anything: ' keep)
+		printf 'Current patched-kernel runtime verification failed; no kernel was removed.\n' >&2
+		exit 1
 	fi
-	if [[ "${choice,,}" == r* ]]; then
-		mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}/t14-len2068-touchpad-patch"
-		printf '%s\n' "$running" >"${XDG_CACHE_HOME:-$HOME/.cache}/t14-len2068-touchpad-patch/.remove-pending"
-		printf '\nRollback recorded. Reboot into any stock distribution kernel, then run this patcher again.\n'
-		printf 'The patcher will remove only the custom kernel after confirming it is no longer running.\n'
-	else
-		printf '\nCustom patched kernel kept.\n'
-	fi
-	finish 0
 fi
 
 pending_remove="${XDG_CACHE_HOME:-$HOME/.cache}/t14-len2068-touchpad-patch/.remove-pending"

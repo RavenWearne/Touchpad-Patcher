@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=2.0.8
+tool_version=3.0.0
 token=psmouse.synaptics_intertouch=0
 conflict=psmouse.synaptics_intertouch=1
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 editor="$project_dir/scripts/t14-ps2-kernel-arg.py"
 grub_entry_helper="$project_dir/scripts/t14-ps2-grub-entry.py"
+machine_inventory_helper="$project_dir/scripts/t14-ps2-machine-inventory.py"
 state_dir=/var/lib/t14-len2068-touchpad-patch
 state_file=$state_dir/native-state
 verbose=0
@@ -47,7 +48,7 @@ trap 'exit 143' TERM
 
 usage() {
 	cat <<EOF
-Usage: $0 [--verbose] [--yes] [preflight|status|apply|verify|rollback|complete-rollback]
+Usage: $0 [--verbose] [--yes] [inventory|preflight|status|apply|verify|rollback|complete-rollback]
 
 Prefer the stock distribution kernel by managing psmouse.synaptics_intertouch=0
 through the active boot manager. No kernel is compiled by this tool.
@@ -59,7 +60,7 @@ while [[ $# -gt 0 ]]; do
 		--verbose) verbose=1; shift ;;
 		--yes) assume_yes=1; shift ;;
 		-h|--help) usage; exit 0 ;;
-		preflight|status|apply|verify|rollback|complete-rollback) action=$1; shift ;;
+		inventory|preflight|status|apply|verify|rollback|complete-rollback) action=$1; shift ;;
 		*) usage >&2; printf 'Unknown argument: %s\n' "$1" >&2; exit 2 ;;
 	esac
 done
@@ -280,7 +281,10 @@ read_current_grub_entry() {
 	set -e
 	case "$status" in
 		0) ;;
-		2) die "the active GRUB configuration has no unique entry for root UUID $current_root_uuid and kernel $current_kernel: $grub_generated_config" ;;
+		2)
+			if [[ ${active_efi_vendor:-} == fedora ]] && read_current_bls_entry; then return 0; fi
+			die "the active GRUB configuration has no unique entry for root UUID $current_root_uuid and kernel $current_kernel: $grub_generated_config"
+			;;
 		3) die "the active GRUB configuration has multiple materially different entries for root UUID $current_root_uuid and kernel $current_kernel; the current-system boot target is ambiguous" ;;
 		*) die 'the active GRUB entry could not be parsed safely' ;;
 	esac
@@ -302,6 +306,40 @@ read_current_grub_entry() {
 	if (( current_grub_equivalent_entries > 1 )); then
 		log "collapsed $current_grub_equivalent_entries equivalent normal GRUB entries into one logical target${current_grub_menu_id:+ (menu ID $current_grub_menu_id)}"
 	fi
+}
+
+read_current_bls_entry() {
+	local directory candidate content version linux options root_match=0 matches=0 selected=''
+	for directory in "$active_grub_mount/boot/loader/entries" "$active_grub_mount/loader/entries"; do
+		if ! privileged_path_status "$directory" dir >/dev/null 2>&1; then continue; fi
+		while IFS= read -r candidate; do
+			content=$(sudo_run cat -- "$candidate") || die "Fedora BLS entry could not be read with administrator privileges: $candidate"
+			version=$(sed -n 's/^version[[:space:]]\+//p' <<<"$content" | head -n1)
+			linux=$(sed -n 's/^linux[[:space:]]\+//p' <<<"$content" | head -n1)
+			options=$(sed -n 's/^options[[:space:]]\+//p' <<<"$content" | head -n1)
+			[[ "$version" == "$current_kernel" || "${linux##*/}" == "vmlinuz-$current_kernel" ]] || continue
+			root_match=0
+			grep -Fqw "root=UUID=$current_root_uuid" <<<"$options" && root_match=1
+			# Fedora BLS commonly uses root=UUID, but permit a unique kernel match when
+			# the root is expressed through a mapper/device path.
+			if (( root_match || matches == 0 )); then selected=$candidate; fi
+			((matches += 1))
+		done < <(sudo_run find "$directory" -maxdepth 1 -type f -name '*.conf' -print | sort)
+	done
+	(( matches == 1 )) || return 1
+	content=$(sudo_run cat -- "$selected") || return 1
+	options=$(sed -n 's/^options[[:space:]]\+//p' <<<"$content" | head -n1)
+	current_grub_title=$(sed -n 's/^title[[:space:]]\+//p' <<<"$content" | head -n1)
+	current_grub_title=${current_grub_title:-Fedora Linux $current_kernel}
+	current_grub_menu_id=${selected##*/}
+	current_grub_menu_id=${current_grub_menu_id%.conf}
+	current_grub_equivalent_entries=1
+	current_grub_os_prober=0
+	current_grub_has_token=0
+	grep -Fqw "$token" <<<"$options" && current_grub_has_token=1
+	current_grub_is_bls=1
+	log "current Fedora installation identified through BLS: $current_grub_menu_id"
+	return 0
 }
 
 inspect_fedora_saved_entry() {
@@ -446,6 +484,7 @@ detect_adapter() {
 		distro_like=${ID_LIKE:-}
 		distro_pretty=${PRETTY_NAME:-$distro_id}
 	fi
+	running_os_pretty=${distro_pretty:-${distro_id:-Linux}}
 	[[ -z "$distro_pretty" ]] || log "$distro_pretty detected"
 	case "$boot_manager" in
 		grub)
@@ -476,6 +515,63 @@ detect_adapter() {
 		config_variable=
 	fi
 	log "active boot manager: $boot_manager ($adapter adapter)"
+}
+
+machine_inventory() {
+	hardware_guard
+	status_query=1
+	detect_adapter
+	if [[ "$boot_manager" != grub ]]; then
+		python3 - "$running_os_pretty" "$(running_kernel)" "$token" <<'PY'
+import json, sys
+name, kernel, token = sys.argv[1:]
+patched = any(value in kernel for value in ("t14-len2068-touchpad-patch", "t14ps2quirk1"))
+active = token in open("/proc/cmdline", encoding="utf-8").read().split() if not __import__("os").environ.get("TOUCHPAD_PATCHER_TESTING") else False
+state = "kernel-patched + native-active" if patched and active else "kernel-patched" if patched else "native-active" if active else "unconfigured"
+json.dump({"bootloader_owner": "", "installations": [{"distribution": name, "kernel": kernel, "current": True, "boot_method": "active boot manager", "kernel_patched": patched, "native_configured": active, "remediation": state, "runtime": "current-live-evidence"}]}, sys.stdout, indent=2)
+print()
+PY
+		return
+	fi
+	current_root_uuid=${current_root_uuid:-$(running_root_uuid)}
+	current_kernel=${current_kernel:-$(running_kernel)}
+	active_grub_mount=${active_grub_mount:-$(root_path /)}
+	if [[ -z ${grub_generated_config:-} ]]; then
+		if candidate_exists /boot/grub/grub.cfg; then
+			grub_generated_config=$(root_path /boot/grub/grub.cfg)
+		elif candidate_exists /boot/grub2/grub.cfg; then
+			grub_generated_config=$(root_path /boot/grub2/grub.cfg)
+		else
+			die 'authoritative GRUB configuration was not found for machine inventory'
+		fi
+	fi
+	local content bls_data='' bls_dir bls_file bls_status
+	content=$(sudo_run cat -- "$grub_generated_config") || die "generated GRUB configuration could not be read with administrator privileges: $grub_generated_config"
+	for bls_dir in "$active_grub_mount/boot/loader/entries" "$active_grub_mount/loader/entries"; do
+		set +e
+		privileged_path_status "$bls_dir" dir >/dev/null 2>&1
+		bls_status=$?
+		set -e
+		case "$bls_status" in
+			0)
+				while IFS= read -r bls_file; do
+					bls_data+="@@BLS ${bls_file##*/}"$'\n'
+					bls_data+=$(sudo_run cat -- "$bls_file") || die "BLS entry could not be read for machine inventory: $bls_file"
+					bls_data+=$'\n'
+				done < <(sudo_run find "$bls_dir" -maxdepth 1 -type f -name '*.conf' -print | sort)
+				break
+				;;
+			3) ;;
+			*) die "BLS entry directory could not be inspected for machine inventory: $bls_dir" ;;
+		esac
+	done
+	python3 "$machine_inventory_helper" \
+		--token "$token" \
+		--current-root "$current_root_uuid" \
+		--current-kernel "$current_kernel" \
+		--current-os "$running_os_pretty" \
+		--owner "${active_efi_label:-GRUB}" \
+		--bls-data "$bls_data" <<<"$content"
 }
 
 regenerate() {
@@ -797,6 +893,7 @@ complete_rollback() {
 
 detail "native manager version=$tool_version action=$action"
 case "$action" in
+	inventory) machine_inventory ;;
 	preflight) hardware_guard; detect_adapter; kernel_supports_parameter || exit 20; log 'native route supported' ;;
 	status) native_status ;;
 	apply) apply_native ;;

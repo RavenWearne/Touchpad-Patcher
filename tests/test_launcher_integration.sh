@@ -503,6 +503,18 @@ set -e
 grep -Fq "generated GRUB kernel command lines do not contain the exact argument 'psmouse.synaptics_intertouch=0'" "$case_dir/output"
 [[ ! -e "$trace_file" ]]
 
+# A patched current Fedora/custom kernel is recorded and verified, but does not
+# end machine inspection before the native configuration path is considered.
+make_case patched-kernel-keeps-scanning
+printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
+TOUCHPAD_PATCHER_TEST_UNAME_R=7.1.8-t14ps2quirk1 run_launcher "$case_dir/output"
+grep -Fq 'already patched; it has been preserved' "$case_dir/output"
+grep -Fq 'machine inspection will continue' "$case_dir/output"
+grep -Fq 'Current patched-kernel remediation runtime verified' "$case_dir/output"
+grep -Fq 'Native fix installed' "$case_dir/output"
+grep -Fq 'verify' "$trace_file"
+if grep -Fq ' all' "$trace_file"; then exit 1; fi
+
 # A genuinely unsupported kernel reaches the custom fallback offer/path.
 make_case native-unsupported
 run_launcher "$case_dir/output"
