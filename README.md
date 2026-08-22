@@ -192,15 +192,26 @@ The source-only operation remains narrow and idempotent:
 
 ## Testing and reports
 
-Fedora's custom-kernel route has been validated end to end. Version 3's native
-boot-manager adapters are structurally tested but need broader physical testing
-across distributions. Submit sanitized results using the repository's
+The following paths have been physically validated end to end on a ThinkPad
+T14 Gen 1 with the LEN2068 / Synaptics TM3471-020 touchpad:
+
+- Fedora Linux 44: custom kernel remediation, native remediation for stock BLS
+  kernels, SynPS/2 runtime verification, and preservation of stock kernels.
+- Linux Mint 22.3 with kernel `6.14.0-37-generic`: native remediation and
+  SynPS/2 runtime verification.
+- Fedora 44 + Linux Mint 22.3 multi-boot: Fedora-owned EFI/GRUB, Mint launched
+  through Fedora's os-prober path, persistent Fedora-side cross-OS patching,
+  post-generation verification of Mint's effective entry, and per-OS runtime
+  verification remembered across subsequent Fedora and Mint boots.
+
+Other boot-manager adapters are structurally tested but still need broader
+physical testing across distributions. Submit sanitized results using the repository's
 [distribution test report](https://github.com/RavenWearne/thinkpad-synaptics-patch/issues/new?template=distro-test.yml).
 
 Maintainers can run the regression suite with:
 
 ```bash
-python3 -m unittest -v tests/test_kernel_arg.py tests/test_dependencies.py tests/test_grub_entry.py tests/test_machine_inventory.py
+python3 -m unittest discover -s tests -p 'test_*.py'
 ./tests/test_native_manager.sh
 ./tests/test_launcher_integration.sh
 ```
