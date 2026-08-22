@@ -162,7 +162,9 @@ run_launcher() {
 # Mint/GRUB native success from a repository path containing spaces.
 make_case native-success
 printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
-run_launcher "$case_dir/output"
+run_launcher "$case_dir/output" TOUCHPAD_PATCHER_TEST_HARDWARE_LOG=1
+grep -Fq 'ThinkPad T14 Gen 1 with LEN2068 detected' "$case_dir/output"
+if grep -Fq 'JSONDecodeError' "$case_dir/output"; then exit 1; fi
 grep -Fq 'Native fix installed' "$case_dir/output"
 grep -Fq 'psmouse.synaptics_intertouch=0' "$fixture_dir/etc/default/grub"
 grep -Fq 'linux /boot/vmlinuz-6.8.0-85-generic root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0 $vt_handoff' "$fixture_dir/boot/grub/grub.cfg"

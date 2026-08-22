@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.0.3
+
+- Initialise machine-inventory output routing before hardware validation so
+  successful hardware diagnostics go to stderr/logs rather than corrupting the
+  JSON document consumed by the launcher.
+- Add a regression that deliberately emits the real ThinkPad/LEN2068 hardware
+  success diagnostic during inventory and proves the launcher still parses the
+  resulting JSON without a traceback.
+
 ## 3.0.2
 
 - Accept both standard `efibootmgr -v` EFI filepath renderings:

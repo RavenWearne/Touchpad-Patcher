@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=3.0.2
+tool_version=3.0.3
 token=psmouse.synaptics_intertouch=0
 conflict=psmouse.synaptics_intertouch=1
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -121,7 +121,10 @@ cmdline_value() {
 input_devices_path() { root_path /proc/bus/input/devices; }
 
 hardware_guard() {
-	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then return; fi
+	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then
+		[[ ${TOUCHPAD_PATCHER_TEST_HARDWARE_LOG:-0} != 1 ]] || log 'ThinkPad T14 Gen 1 with LEN2068 detected'
+		return
+	fi
 	local vendor product version firmware_file firmware_id found=0
 	vendor=$(read_dmi sys_vendor)
 	product=$(read_dmi product_name)
@@ -528,8 +531,8 @@ detect_adapter() {
 }
 
 machine_inventory() {
-	hardware_guard
 	status_query=1
+	hardware_guard
 	detect_adapter
 	if [[ "$boot_manager" != grub ]]; then
 		python3 - "$running_os_pretty" "$(running_kernel)" "$token" <<'PY'
