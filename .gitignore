@@ -17,6 +17,7 @@
 scripts/*
 !scripts/t14-ps2-kernel-arg.py
 !scripts/t14-ps2-grub-entry.py
+!scripts/t14-ps2-foreign-grub.py
 !scripts/t14-ps2-machine-inventory.py
 !scripts/t14-ps2-user-summary.py
 !scripts/t14-ps2-kernel-installer.sh
@@ -27,6 +28,7 @@ tests/*
 !tests/test_kernel_arg.py
 !tests/test_dependencies.py
 !tests/test_grub_entry.py
+!tests/test_foreign_grub.py
 !tests/test_machine_inventory.py
 !tests/test_user_summary.py
 !tests/test_launcher_integration.sh

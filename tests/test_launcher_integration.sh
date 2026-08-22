@@ -3,7 +3,7 @@ set -euo pipefail
 
 source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 test_root=$(mktemp -d --tmpdir 'touchpad patcher tests.XXXXXX')
-trap 'rm -rf -- "$test_root"' EXIT
+trap '[[ ${TOUCHPAD_TEST_KEEP_TMP:-0} == 1 ]] || rm -rf -- "$test_root"' EXIT
 
 make_case() {
 	local name=$1
@@ -159,6 +159,89 @@ run_launcher() {
 		"$@" "$repo_dir/Run Touchpad Patcher.sh" >"$output_file" 2>&1
 }
 
+setup_fedora_cross_os_case() {
+	local fedora_root=f6908430-c988-4184-bfe7-6dde012943a9
+	local mint_root=501f6d9f-910b-4ff3-8820-ac4e2272bf8b
+	printf '%s\n' 'ID=fedora' 'ID_LIKE="rhel"' 'PRETTY_NAME="Fedora Linux 44 (KDE Plasma Desktop Edition)"' >"$fixture_dir/etc/os-release"
+	mkdir -p "$fixture_dir/sys/firmware/efi" "$fixture_dir/boot/efi/EFI/fedora" \
+		"$fixture_dir/boot/loader/entries" "$fixture_dir/grub2" "$fixture_dir/etc/grub.d"
+	touch "$fixture_dir/boot/efi/EFI/fedora/shimx64.efi"
+	printf '%s\n' \
+		'search --no-floppy --fs-uuid --set=root 11111111-2222-3333-4444-555555555555' \
+		'set prefix=($root)/grub2' 'configfile $prefix/grub.cfg' >"$fixture_dir/boot/efi/EFI/fedora/grub.cfg"
+	printf '%s\n' 'BootCurrent: 0001' \
+		'Boot0001* Fedora HD(1,GPT,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,0x800,0x100000)/\EFI\fedora\shimx64.efi' \
+		>"$fixture_dir/efibootmgr.out"
+	cat >"$fake_bin/efibootmgr" <<'SH'
+#!/usr/bin/env bash
+cat "$TOUCHPAD_PATCHER_TEST_ROOT/efibootmgr.out"
+SH
+	cat >"$fixture_dir/boot/loader/entries/fedora-patched.conf" <<EOF
+title Fedora Linux 44
+version 7.1.8-t14ps2quirk1
+linux /vmlinuz-7.1.8-t14ps2quirk1
+options root=UUID=$fedora_root ro quiet
+EOF
+	cat >"$fixture_dir/boot/loader/entries/fedora-stock.conf" <<EOF
+title Fedora Linux 44
+version 7.1.8-200.fc44.x86_64
+linux /vmlinuz-7.1.8-200.fc44.x86_64
+options root=UUID=$fedora_root ro quiet
+EOF
+	printf '%s\n' \
+		'### BEGIN /etc/grub.d/30_os-prober ###' \
+		"menuentry 'Linux Mint 22.3 Cinnamon (on /dev/nvme0n1p4)' --id mint {" \
+		" linux /boot/vmlinuz-6.14.0-37-generic root=UUID=$mint_root ro quiet splash" \
+		' initrd /boot/initrd.img-6.14.0-37-generic' '}' \
+		"menuentry 'Linux Mint 22.3 Cinnamon, with Linux 6.14.0-37-generic (on /dev/nvme0n1p4)' --id mint {" \
+		" linux /boot/vmlinuz-6.14.0-37-generic root=UUID=$mint_root ro quiet splash" \
+		' initrd /boot/initrd.img-6.14.0-37-generic' '}' \
+		"menuentry 'Linux Mint recovery mode (on /dev/nvme0n1p4)' --id mint-recovery {" \
+		" linux /boot/vmlinuz-6.14.0-37-generic root=UUID=$mint_root ro recovery" \
+		' initrd /boot/initrd.img-6.14.0-37-generic' '}' \
+		'### END /etc/grub.d/30_os-prober ###' >"$fixture_dir/grub2/grub.cfg"
+	cp -a -- "$fixture_dir/grub2/grub.cfg" "$fixture_dir/osprober-original.cfg"
+	cat >"$fake_bin/grubby" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+entries=$TOUCHPAD_PATCHER_TEST_ROOT/boot/loader/entries
+if [[ ${1:-} == --info=ALL ]]; then
+	for entry in "$entries"/*.conf; do sed -n 's/^options /args="/p' "$entry" | sed 's/$/"/'; done
+	exit 0
+fi
+if [[ ${1:-} == --update-kernel=ALL ]]; then
+	for entry in "$entries"/*.conf; do
+		sed -i 's/ psmouse\.synaptics_intertouch=[01]//g' "$entry"
+		if [[ "$*" == *'--args=psmouse.synaptics_intertouch=0'* ]]; then sed -i '/^options /s/$/ psmouse.synaptics_intertouch=0/' "$entry"; fi
+	done
+	exit 0
+fi
+exit 2
+SH
+	cat >"$fake_bin/blkid" <<EOF
+#!/usr/bin/env bash
+[[ \${1:-} == -U && \${2:-} == $mint_root ]] || exit 2
+printf '%s\n' /dev/nvme0n1p4
+EOF
+	cat >"$fake_bin/grub2-mkconfig" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ ${1:-} == -o && -n ${2:-} ]] || exit 2
+output=$2
+if [[ ${TOUCHPAD_TEST_CROSS_REGEN_OMIT:-0} == 1 ]]; then
+	printf '%s\n' '# regenerated without the managed foreign entry' >"$output"
+	exit 0
+fi
+script=$TOUCHPAD_PATCHER_TEST_ROOT/etc/grub.d/29_t14_len2068_touchpad
+if [[ -x "$script" ]]; then
+	"$script" >"$output"
+else
+	cp -a -- "$TOUCHPAD_PATCHER_TEST_ROOT/osprober-original.cfg" "$output"
+fi
+SH
+	chmod +x "$fake_bin/efibootmgr" "$fake_bin/grubby" "$fake_bin/blkid" "$fake_bin/grub2-mkconfig"
+}
+
 # Mint/GRUB native success from a repository path containing spaces.
 make_case native-success
 printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
@@ -306,7 +389,7 @@ grep -RFq 'current linuxmint installation is booted through Fedora GRUB via an o
 grep -RFq 'collapsed 2 equivalent normal GRUB entries into one logical target (menu ID osprober-mint-current)' "$repo_dir/logs"
 grep -RFq "Fedora GRUB saved/default entry: $saved_fedora_entry (independent of the current Mint entry)" "$repo_dir/logs"
 grep -RFq "Fedora saved entry is backed by BLS:" "$repo_dir/logs"
-grep -Fq 'cannot be modified safely from the running installation' "$case_dir/output"
+grep -Fq 'must be patched through Fedora GRUB' "$case_dir/output"
 grep -Fq 'mount -o ro --' "$privileged_trace"
 grep -Fq 'findmnt -rn -S' "$privileged_trace"
 grep -Fq 'umount --' "$privileged_trace"
@@ -329,6 +412,7 @@ TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
 	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
 	run_launcher "$case_dir/foreign-adoption-output"
 grep -Fq 'Touchpad patch active' "$case_dir/foreign-adoption-output"
+if grep -Fq 'Applying patches' "$case_dir/foreign-adoption-output"; then exit 1; fi
 if grep -Fq 'bootloader-owning installation' "$case_dir/foreign-adoption-output"; then exit 1; fi
 grep -Fq 'ownership=external' "$fixture_dir/var/lib/t14-len2068-touchpad-patch/native-state"
 grep -Fq 'status=verified' "$fixture_dir/var/lib/t14-len2068-touchpad-patch/native-state"
@@ -346,6 +430,8 @@ set -e
 grep -Fq 'rollback must be run from the authoritative bootloader owner' <<<"$rollback_output"
 TOUCHPAD_PATCHER_TEST_ROOT="$fixture_dir" TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
 	"$fake_bin/privileged-chain-run" cat -- "$foreign_generated" | grep -Fq 'psmouse.synaptics_intertouch=0'
+chmod u+rwx "$fixture_dir/boot/efi"
+find "$fixture_dir/boot/efi" "$fixture_dir/devices" -mindepth 1 -exec chmod u+rwX {} +
 
 # An already-mounted active GRUB filesystem is reused without a temporary mount.
 : >"$privileged_trace"
@@ -423,6 +509,64 @@ grep -Fq 'umount --' "$privileged_trace"
 [[ ! -e "$fixture_dir/run/t14-len2068-touchpad-patch/grub-2b35be97-3acf-4fde-8fa4-9961c3202da2" ]]
 chmod u+rwx "$fixture_dir/boot/efi"
 
+# Fedora BLS remediation and Mint os-prober remediation are independent. A
+# patcher-owned persistent GRUB source must replace Mint's generated entries,
+# and success is reported only after the regenerated effective entries verify.
+make_case fedora-cross-os-success
+setup_fedora_cross_os_case
+printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
+for bls_entry in "$fixture_dir/boot/loader/entries"/*.conf; do
+	sed -i '/^options /s/$/ psmouse.synaptics_intertouch=0/' "$bls_entry"
+done
+printf '%s\n' 'quiet psmouse.synaptics_intertouch=0' >"$fixture_dir/proc/cmdline"
+TOUCHPAD_PATCHER_TEST_ROOT_UUID=f6908430-c988-4184-bfe7-6dde012943a9 \
+	TOUCHPAD_PATCHER_TEST_UNAME_R=7.1.8-t14ps2quirk1 \
+	run_launcher "$case_dir/output"
+grep -Fq 'Fedora stock kernels patched' "$case_dir/output"
+grep -Fq 'Linux Mint 22.3 detected — touchpad patch required' "$case_dir/output"
+grep -Fq 'Linux Mint 22.3 patched' "$case_dir/output"
+grep -Fq 'Reboot into each newly patched system for runtime verification' "$case_dir/output"
+managed_cross_script="$fixture_dir/etc/grub.d/29_t14_len2068_touchpad"
+[[ -x "$managed_cross_script" ]]
+grep -Fq 'Managed by ThinkPad T14 LEN2068 Touchpad Patcher' "$managed_cross_script"
+grep -Fq 'GRUB_OS_PROBER_SKIP_LIST=' "$fixture_dir/etc/default/grub"
+[[ $(grep -Fc 'psmouse.synaptics_intertouch=0' "$fixture_dir/grub2/grub.cfg") -eq 3 ]]
+if grep -Fq '### BEGIN /etc/grub.d/30_os-prober ###' "$fixture_dir/grub2/grub.cfg"; then exit 1; fi
+
+# Unified rollback removes only the patcher-owned generator and skip-list
+# values, restores Fedora BLS arguments, and regenerates os-prober output.
+rollback_output=$(env PATH="$fake_bin:$PATH" \
+	TOUCHPAD_PATCHER_TESTING=1 \
+	TOUCHPAD_PATCHER_TEST_ROOT="$fixture_dir" \
+	TOUCHPAD_PATCHER_TEST_ROOT_UUID=f6908430-c988-4184-bfe7-6dde012943a9 \
+	TOUCHPAD_PATCHER_TEST_UNAME_R=7.1.8-t14ps2quirk1 \
+	TOUCHPAD_PATCHER_BOOT_MANAGER=grub \
+	"$repo_dir/scripts/t14-ps2-native-manager.sh" rollback)
+grep -Fq 'native parameter removed' <<<"$rollback_output"
+[[ ! -e "$managed_cross_script" ]]
+if grep -Fq '501f6d9f-910b-4ff3-8820-ac4e2272bf8b' "$fixture_dir/etc/default/grub"; then exit 1; fi
+grep -Fq '### BEGIN /etc/grub.d/30_os-prober ###' "$fixture_dir/grub2/grub.cfg"
+if grep -Fq 'psmouse.synaptics_intertouch=0' "$fixture_dir/grub2/grub.cfg"; then exit 1; fi
+
+# A successful Fedora/BLS update is not promoted to Mint success when the
+# authoritative regenerated Mint target is absent or lacks the exact token.
+make_case fedora-cross-os-verification-failure
+setup_fedora_cross_os_case
+printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
+set +e
+TOUCHPAD_PATCHER_TEST_ROOT_UUID=f6908430-c988-4184-bfe7-6dde012943a9 \
+	TOUCHPAD_PATCHER_TEST_UNAME_R=7.1.8-t14ps2quirk1 \
+	TOUCHPAD_TEST_CROSS_REGEN_OMIT=1 \
+	run_launcher "$case_dir/output"
+status=$?
+set -e
+[[ $status -eq 1 ]]
+if grep -Fq 'Linux Mint 22.3 patched' "$case_dir/output"; then exit 1; fi
+grep -Fq 'regenerated authoritative GRUB entry for Linux Mint 22.3' "$case_dir/output"
+grep -Fq 'custom-kernel fallback was not started' "$case_dir/output"
+grep -Fq verify "$trace_file"
+if grep -Fq ' all' "$trace_file"; then exit 1; fi
+
 # The inverse arrangement is also traced: Fedora may run through Ubuntu GRUB.
 make_case ubuntu-grub-booting-fedora
 printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
@@ -436,7 +580,7 @@ status=$?
 set -e
 [[ $status -eq 1 ]]
 grep -RFq 'current fedora installation is booted through Ubuntu GRUB via an os-prober-generated entry' "$repo_dir/logs"
-grep -Fq 'cannot be modified safely from the running installation' "$case_dir/output"
+grep -Fq 'must be patched through Ubuntu GRUB' "$case_dir/output"
 [[ ! -e "$trace_file" ]]
 
 # A failed privileged inspection is not misreported as a missing EFI loader.

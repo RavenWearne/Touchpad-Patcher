@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.1.1
+
+- Treat Fedora BLS/grubby targets and foreign Mint os-prober targets as
+  independent remediation scopes; Fedora success no longer implies Mint
+  success.
+- From the authoritative Fedora installation, persistently replace positively
+  identified Mint os-prober entries with patcher-owned `/etc/grub.d` entries
+  containing the native parameter, while suppressing only that Mint filesystem
+  through `GRUB_OS_PROBER_SKIP_LIST`.
+- Preserve generic, version-specific, and recovery Mint entries in the managed
+  source, retain equivalent-entry collapsing, and never edit generated
+  `grub.cfg` directly.
+- Regenerate authoritative Fedora GRUB and rediscover every Mint target by root
+  UUID and kernel; report Mint as patched only when every effective matching
+  Linux line contains the exact required argument.
+- Keep Mint-side foreign-owner refusal fail-closed and present it concisely as
+  remediation that must be run from Fedora.
+- Extend unified rollback to remove the patcher-owned foreign generator and
+  only the skip-list values added by the patcher before regenerating os-prober
+  output.
+- Add physical Fedora-GRUB→Mint regressions for independent BLS state,
+  successful cross-OS application, mandatory post-write verification,
+  equivalent/recovery entry preservation, Mint runtime adoption, stale-state
+  authority, rollback, and no automatic custom-kernel fallback.
+
 ## 3.1.0
 
 - Replace the diagnostic-heavy normal launcher output with a concise current

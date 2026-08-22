@@ -57,6 +57,22 @@ menuentry 'Linux Mint recovery mode (on /dev/nvme0n1p4)' {{
         self.assertTrue(targets[0]["kernel_patched"])
         self.assertTrue(targets[0]["native_configured"])
 
+    def test_fedora_bls_argument_does_not_propagate_to_mint_os_prober(self):
+        mint_config = f"""### BEGIN /etc/grub.d/30_os-prober ###
+menuentry 'Linux Mint 22.3 (on /dev/nvme0n1p4)' {{
+ linux /boot/vmlinuz-6.14.0-37-generic root=UUID={MINT_UUID} ro quiet splash
+}}
+### END /etc/grub.d/30_os-prober ###
+"""
+        mint = MODULE.collect(mint_config, TOKEN)[0]
+        fedora = MODULE.collect_bls(
+            "@@BLS fedora.conf\ntitle Fedora Linux\nversion 7.1.8-200.fc44.x86_64\n"
+            f"options root=UUID=fedora ro {TOKEN}\n",
+            TOKEN,
+        )[0]
+        self.assertTrue(fedora["native_configured"])
+        self.assertFalse(mint["native_configured"])
+
     def test_fedora_rescue_bls_entry_is_excluded(self):
         targets = MODULE.collect_bls(
             "@@BLS machine-0-rescue.conf\n"

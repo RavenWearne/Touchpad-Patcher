@@ -14,7 +14,7 @@ launcher verifies, retains, and rolls back either method.
 ```bash
 git clone --no-checkout https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
 cd "Touchpad Patcher"
-git switch --create stable-v3.1.0 v3.1.0
+git switch --create stable-v3.1.1 v3.1.1
 ./Run\ Touchpad\ Patcher.sh
 ```
 
@@ -90,10 +90,16 @@ state is reported separately from the Mint entry that produced the running
 system. Because an os-prober menu entry is generated output owned by the other
 installation, the patcher never edits it or Mint's inactive GRUB settings.
 Fedora's supported `grubby` operation is scoped to Fedora/BLS kernels; it is
-not misreported as changing foreign os-prober entries. Those targets remain
-separate remediation work, with runtime verification pending until each OS is
-booted. Ambiguous chains and entries stop safely and never trigger an automatic
-kernel build.
+not treated as changing foreign os-prober entries. When Fedora owns the
+authoritative GRUB, the patcher handles a positively identified Mint target as
+separate remediation work: it installs a patcher-owned persistent generator in
+`/etc/grub.d`, adds only Mint's filesystem UUID to GRUB's os-prober skip list,
+regenerates the authoritative Fedora configuration, and verifies every matching
+Mint entry by root UUID and kernel. Generated `grub.cfg` is never edited
+directly. Mint is reported as patched only after its effective generated Linux
+lines contain the exact argument. Runtime verification remains pending until
+Mint is booted. Ambiguous chains and entries stop safely and never trigger an
+automatic kernel build.
 
 When a foreign authoritative GRUB entry already contains the parameter, the
 booted installation can adopt and verify that result using its exact generated

@@ -43,6 +43,7 @@ def entries(text: str):
             current = {
                 "title": match.group(2),
                 "id": menu_id(line),
+                "opening": line,
                 "lines": [],
                 "os_prober": os_prober,
             }

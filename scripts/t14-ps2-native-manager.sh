@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=3.1.0
+tool_version=3.1.1
 token=psmouse.synaptics_intertouch=0
 conflict=psmouse.synaptics_intertouch=1
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 editor="$project_dir/scripts/t14-ps2-kernel-arg.py"
 grub_entry_helper="$project_dir/scripts/t14-ps2-grub-entry.py"
 machine_inventory_helper="$project_dir/scripts/t14-ps2-machine-inventory.py"
+foreign_grub_helper="$project_dir/scripts/t14-ps2-foreign-grub.py"
 state_dir=/var/lib/t14-len2068-touchpad-patch
 state_file=$state_dir/native-state
 verbose=0
@@ -617,11 +618,13 @@ regenerate() {
 
 state_write() {
 	local prior_conflict=$1 ownership=${2:-local}
+	local managed_foreign_script=${3:-} managed_foreign_skip_tokens=${4:-}
 	state_dir=$(root_path /var/lib/t14-len2068-touchpad-patch)
 	state_file=$state_dir/native-state
 	sudo_run mkdir -p "$state_dir"
-	printf 'method=native\nadapter=%q\nboot_manager=%q\nconfig_path=%q\nprior_conflict=%q\nownership=%q\nstatus=pending-verification\n' \
-		"$adapter" "$boot_manager" "$config_path" "$prior_conflict" "$ownership" | sudo_run tee "$state_file" >/dev/null
+	printf 'method=native\nadapter=%q\nboot_manager=%q\nconfig_path=%q\nprior_conflict=%q\nownership=%q\nforeign_script=%q\nforeign_skip_tokens=%q\nstatus=pending-verification\n' \
+		"$adapter" "$boot_manager" "$config_path" "$prior_conflict" "$ownership" \
+		"$managed_foreign_script" "$managed_foreign_skip_tokens" | sudo_run tee "$state_file" >/dev/null
 }
 
 load_state() {
@@ -782,6 +785,114 @@ verify_generated_absent_token() {
 	esac
 }
 
+regenerate_authoritative_grub() {
+	[[ "$boot_manager" == grub && -n ${grub_generated_config:-} ]] || die 'the authoritative GRUB output is not available for cross-OS remediation'
+	if command -v grub2-mkconfig >/dev/null; then
+		sudo_run grub2-mkconfig -o "$grub_generated_config"
+	elif command -v grub-mkconfig >/dev/null; then
+		sudo_run grub-mkconfig -o "$grub_generated_config"
+	else
+		die 'the authoritative GRUB installation has no supported regeneration command for cross-OS remediation'
+	fi
+	log 'authoritative GRUB configuration regenerated after cross-OS remediation'
+}
+
+foreign_unpatched_targets() {
+	local inventory
+	inventory=$(machine_inventory) || return
+	python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+seen = set()
+for item in data["installations"]:
+    if item.get("os_prober") and not item.get("native_configured") and not item.get("kernel_patched"):
+        key = (item["root_uuid"].lower(), item["kernel"])
+        if key not in seen:
+            seen.add(key)
+            print("\t".join((item["root_uuid"], item["kernel"], item["distribution"])))
+' <<<"$inventory"
+}
+
+apply_foreign_grub_targets() {
+	foreign_script=
+	foreign_skip_tokens=
+	[[ "$adapter" == grubby && "${active_efi_label,,}" == *fedora* ]] || return 0
+	local targets target_status
+	set +e
+	targets=$(foreign_unpatched_targets)
+	target_status=$?
+	set -e
+	(( target_status == 0 )) || die 'the foreign Linux remediation scope could not be inventoried safely'
+	[[ -n "$targets" ]] || return 0
+
+	local defaults managed_script generated_content managed_content root_uuid kernel distribution device
+	local -a skip_tokens=() added_skip_tokens=()
+	defaults=$(root_path /etc/default/grub)
+	managed_script=$(root_path /etc/grub.d/29_t14_len2068_touchpad)
+	require_privileged_path 'Fedora GRUB defaults' "$defaults" file
+	generated_content=$(sudo_run cat -- "$grub_generated_config") || die "authoritative GRUB configuration could not be read: $grub_generated_config"
+	managed_content=$'#!/bin/sh\nexec tail -n +3 "$0"\n# Managed by ThinkPad T14 LEN2068 Touchpad Patcher\n'
+	while IFS=$'\t' read -r root_uuid kernel distribution; do
+		[[ -n "$root_uuid" && -n "$kernel" ]] || continue
+		if [[ "$distribution" != Linux\ Mint* ]]; then
+			die "automatic cross-OS remediation is not approved for the detected foreign installation '$distribution'"
+		fi
+		local rendered
+		rendered=$(python3 "$foreign_grub_helper" render "$root_uuid" "$kernel" "$token" "$conflict" <<<"$generated_content") || \
+			die "a persistent Fedora-owned entry could not be built safely for $distribution kernel $kernel"
+		managed_content+=$(tail -n +4 <<<"$rendered")
+		managed_content+=$'\n'
+		device=$(sudo_run blkid -U "$root_uuid") || die "the foreign root UUID $root_uuid could not be resolved to a block device"
+		[[ -n "$device" ]] || die "the foreign root UUID $root_uuid resolved to an empty block-device path"
+		skip_tokens+=("$root_uuid" "$root_uuid@$device")
+	done <<<"$targets"
+
+	local defaults_backup="${defaults}.touchpad-patcher-v3-backup"
+	local backup_status
+	set +e
+	privileged_path_status "$defaults_backup" file >/dev/null 2>&1
+	backup_status=$?
+	set -e
+	case "$backup_status" in
+		0) ;;
+		3) sudo_run cp -a -- "$defaults" "$defaults_backup" ;;
+		*) die "Fedora GRUB defaults backup could not be inspected: $defaults_backup" ;;
+	esac
+	local managed_status managed_existing
+	set +e
+	privileged_path_status "$managed_script" file >/dev/null 2>&1
+	managed_status=$?
+	set -e
+	case "$managed_status" in
+		0)
+			managed_existing=$(sudo_run cat -- "$managed_script") || die "existing managed GRUB source could not be read: $managed_script"
+			grep -Fq '# Managed by ThinkPad T14 LEN2068 Touchpad Patcher' <<<"$managed_existing" || \
+				die "refusing to overwrite an unrecognised GRUB generator: $managed_script"
+			;;
+		3) ;;
+		*) die "managed GRUB source path could not be inspected: $managed_script" ;;
+	esac
+	local existing_skip_values skip_token
+	existing_skip_values=$(sudo_run python3 "$foreign_grub_helper" skip-list "$defaults") || die 'Fedora GRUB os-prober skip state could not be read'
+	for skip_token in "${skip_tokens[@]}"; do
+		grep -Fxq "$skip_token" <<<"$existing_skip_values" || added_skip_tokens+=("$skip_token")
+	done
+	printf '%s' "$managed_content" | sudo_run tee "$managed_script" >/dev/null
+	sudo_run chmod 0755 "$managed_script"
+	sudo_run python3 "$foreign_grub_helper" skip-add "$defaults" "${skip_tokens[@]}"
+	foreign_script=$managed_script
+	foreign_skip_tokens=${added_skip_tokens[*]}
+	log "persistent Fedora-owned foreign Linux entries installed: $managed_script"
+	regenerate_authoritative_grub
+	generated_content=$(sudo_run cat -- "$grub_generated_config") || die "regenerated authoritative GRUB configuration could not be read: $grub_generated_config"
+	while IFS=$'\t' read -r root_uuid kernel distribution; do
+		[[ -n "$root_uuid" && -n "$kernel" ]] || continue
+		python3 "$foreign_grub_helper" verify "$root_uuid" "$kernel" "$token" <<<"$generated_content" || \
+			die "the regenerated authoritative GRUB entry for $distribution kernel $kernel did not retain the native parameter"
+		log "cross-OS boot target verified: $distribution root UUID $root_uuid kernel $kernel"
+	done <<<"$targets"
+}
+
 apply_native() {
 	hardware_guard
 	detect_adapter
@@ -794,7 +905,8 @@ apply_native() {
 	fi
 	if config_contains_token; then
 		verify_generated_contains_token
-		state_write 0
+		apply_foreign_grub_targets
+		state_write 0 local "${foreign_script:-}" "${foreign_skip_tokens:-}"
 		log 'existing native parameter adopted for verification; reboot if it is not active yet'
 		return 0
 	fi
@@ -828,7 +940,8 @@ apply_native() {
 	regenerate
 	config_contains_token || die 'boot configuration regeneration did not retain the native parameter'
 	verify_generated_contains_token
-	state_write "$prior_conflict"
+	apply_foreign_grub_targets
+	state_write "$prior_conflict" local "${foreign_script:-}" "${foreign_skip_tokens:-}"
 	log 'native parameter installed and verified in boot configuration; reboot required'
 }
 
@@ -882,6 +995,18 @@ rollback_native() {
 		sudo_run "${command[@]}"
 	fi
 	regenerate
+	if [[ -n ${foreign_script:-} ]]; then
+		sudo_run rm -f -- "$foreign_script"
+		if [[ -n ${foreign_skip_tokens:-} ]]; then
+			local foreign_defaults
+			foreign_defaults=$(root_path /etc/default/grub)
+			local -a recorded_skip_tokens=()
+			read -r -a recorded_skip_tokens <<<"$foreign_skip_tokens"
+			sudo_run python3 "$foreign_grub_helper" skip-remove "$foreign_defaults" "${recorded_skip_tokens[@]}"
+		fi
+		regenerate_authoritative_grub
+		log 'persistent cross-OS GRUB remediation removed'
+	fi
 	config_contains_token && die 'rollback did not remove the native parameter from boot configuration'
 	verify_generated_absent_token
 	sudo_run sed -i 's/^status=.*/status=rollback-pending-reboot/' "$state_file"
