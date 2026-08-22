@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.0.2
 
 - Verify generated GRUB kernel command lines through an administrator-readable
   configuration stream, fixing false failures when Mint protects

@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for testing v2.0.1. Report the native route where supported, or the custom-kernel fallback.
+        Thanks for testing v2.0.2. Report the native route where supported, or the custom-kernel fallback.
         Remove usernames, serial numbers, hostnames, and other private information from pasted logs.
 
   - type: input

@@ -13,7 +13,7 @@ launcher verifies, retains, and rolls back either method.
 ```bash
 git clone --no-checkout https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
 cd "Touchpad Patcher"
-git switch --create stable-v2.0.1 v2.0.1
+git switch --create stable-v2.0.2 v2.0.2
 ./Run\ Touchpad\ Patcher.sh
 ```
 
