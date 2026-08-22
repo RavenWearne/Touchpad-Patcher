@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.0.7
+
+- Handle `findmnt` status 1 as the expected “valid active GRUB filesystem is
+  not currently mounted” result instead of allowing `set -e`/`pipefail` to
+  terminate boot-chain tracing.
+- Reuse an existing mount when present; otherwise create a controlled mount
+  under `/run/t14-len2068-touchpad-patch`, mount the traced device read-only,
+  and inspect the downstream GRUB configuration there.
+- Treat genuine `findmnt` errors and read-only mount failures as explicit fatal
+  native-route errors without starting the custom-kernel fallback.
+- Preserve the original process status while cleaning temporary mounts on
+  success, failure, HUP, INT, and TERM, and report unmount/mount-point cleanup.
+- Extend the Fedora-GRUB-booting-Mint fixture with mounted, unmounted,
+  mount-failure, `findmnt`-failure, and signal-cleanup regressions.
+
 ## 2.0.6
 
 - Perform ESP traversal, EFI loader/stub checks, GRUB filesystem discovery,

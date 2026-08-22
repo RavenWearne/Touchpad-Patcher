@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=2.0.6
+tool_version=2.0.7
 token=psmouse.synaptics_intertouch=0
 conflict=psmouse.synaptics_intertouch=1
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -16,11 +16,34 @@ status_query=0
 temporary_grub_mount=
 
 cleanup() {
-	[[ -n "$temporary_grub_mount" ]] || return 0
-	sudo_run umount -- "$temporary_grub_mount" >/dev/null 2>&1 || true
-	sudo_run rmdir -- "$temporary_grub_mount" >/dev/null 2>&1 || true
+	local mount_point=${temporary_grub_mount:-} cleanup_status=0
+	[[ -n "$mount_point" ]] || return 0
+	temporary_grub_mount=
+	if sudo_run umount -- "$mount_point"; then
+		log "temporary GRUB filesystem unmounted: $mount_point"
+	else
+		printf '[native] ERROR: temporary GRUB filesystem could not be unmounted: %s\n' "$mount_point" >&2
+		cleanup_status=1
+	fi
+	if sudo_run rmdir -- "$mount_point"; then
+		log "temporary GRUB mount point removed: $mount_point"
+	else
+		printf '[native] ERROR: temporary GRUB mount point could not be removed: %s\n' "$mount_point" >&2
+		cleanup_status=1
+	fi
+	return "$cleanup_status"
 }
-trap cleanup EXIT
+
+on_exit() {
+	local status=$?
+	trap - EXIT HUP INT TERM
+	if ! cleanup && (( status == 0 )); then status=1; fi
+	exit "$status"
+}
+trap on_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 usage() {
 	cat <<EOF
@@ -183,16 +206,42 @@ running_kernel() {
 	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then printf '%s\n' "${TOUCHPAD_PATCHER_TEST_UNAME_R:-$(uname -r)}"; else uname -r; fi
 }
 
+find_existing_mount() {
+	local device=$1 output status
+	set +e
+	output=$(sudo_run findmnt -rn -S "$device" -o TARGET 2>/dev/null)
+	status=$?
+	set -e
+	case "$status" in
+		0)
+			mount_dir=${output%%$'\n'*}
+			[[ -n "$mount_dir" ]] || die "findmnt succeeded but returned no mount point for the active GRUB device: $device"
+			log "active GRUB filesystem already mounted: $device → $mount_dir"
+			;;
+		1)
+			mount_dir=
+			log "active GRUB filesystem is not mounted: $device"
+			;;
+		*) die "findmnt failed while inspecting the active GRUB device $device (status $status)" ;;
+	esac
+}
+
 resolve_grub_filesystem() {
 	local uuid=$1 device mount_dir
 	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then
 		if [[ ${TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT:-0} == 1 ]]; then
 			device=$(root_path "/devices/$uuid")
 			require_privileged_path "test GRUB filesystem device (UUID=$uuid)" "$device" dir
-			temporary_grub_mount=$(root_path "/run/t14-len2068-touchpad-patch/grub-$uuid")
-			sudo_run mkdir -p -- "$temporary_grub_mount"
-			sudo_run mount -o ro -- "$device" "$temporary_grub_mount" || die "test GRUB filesystem could not be mounted read-only: UUID=$uuid"
-			active_grub_mount=$temporary_grub_mount
+			find_existing_mount "$device"
+			if [[ -n "$mount_dir" ]]; then
+				active_grub_mount=$mount_dir
+			else
+				temporary_grub_mount=$(root_path "/run/t14-len2068-touchpad-patch/grub-$uuid")
+				sudo_run mkdir -p -- "$temporary_grub_mount"
+				log "mounting active GRUB filesystem read-only: $device → $temporary_grub_mount"
+				sudo_run mount -o ro -- "$device" "$temporary_grub_mount" || die "test GRUB filesystem could not be mounted read-only: UUID=$uuid"
+				active_grub_mount=$temporary_grub_mount
+			fi
 			active_grub_is_local=0
 			return
 		fi
@@ -203,12 +252,14 @@ resolve_grub_filesystem() {
 	device="/dev/disk/by-uuid/$uuid"
 	require_privileged_path "filesystem referenced by the active GRUB stub (UUID=$uuid)" "$device"
 	device=$(sudo_run readlink -f -- "$device") || die "the active GRUB filesystem device could not be resolved with administrator privileges: UUID=$uuid"
-	mount_dir=$(sudo_run findmnt -rn -S "$device" -o TARGET | head -n1)
+	log "active GRUB filesystem resolved: UUID=$uuid → $device"
+	find_existing_mount "$device"
 	if [[ -n "$mount_dir" ]]; then
 		active_grub_mount=$mount_dir
 	else
 		temporary_grub_mount="/run/t14-len2068-touchpad-patch/grub-${uuid,,}"
 		sudo_run mkdir -p -- "$temporary_grub_mount"
+		log "mounting active GRUB filesystem read-only: $device → $temporary_grub_mount"
 		sudo_run mount -o ro -- "$device" "$temporary_grub_mount" || die "the filesystem referenced by the active GRUB stub could not be mounted read-only: UUID=$uuid"
 		active_grub_mount=$temporary_grub_mount
 	fi

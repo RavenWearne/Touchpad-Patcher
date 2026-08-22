@@ -104,14 +104,27 @@ printf '\n' >>"$TOUCHPAD_TEST_PRIVILEGED_TRACE"
 chmod u+rwx "$root/boot/efi" 2>/dev/null || true
 find "$root/boot/efi" "$root/devices" "$root/run" -mindepth 1 -exec chmod u+rwX {} + 2>/dev/null || true
 case ${1:-} in
+	findmnt)
+		case ${TOUCHPAD_TEST_FINDMNT_MODE:-unmounted} in
+			mounted) printf '%s\n' "${TOUCHPAD_TEST_EXISTING_MOUNT:?}"; status=0 ;;
+			unmounted) status=1 ;;
+			error) status=2 ;;
+		esac
+		;;
 	mount)
+		if [[ ${TOUCHPAD_TEST_MOUNT_FAIL:-0} == 1 ]]; then status=32; else
 		source=${@: -2:1}
 		target=${@: -1}
 		mkdir -p -- "$target"
-		cp -a -- "$source/." "$target/"
+		ln -s -- "$source/grub2" "$target/grub2"
 		status=0
+		if [[ ${TOUCHPAD_TEST_SIGNAL_AFTER_MOUNT:-0} == 1 ]]; then kill -TERM "$PPID"; fi
+		fi
 		;;
-	umount) status=0 ;;
+	umount)
+		target=${!#}
+		if [[ -L "$target/grub2" ]]; then unlink "$target/grub2"; status=0; else status=32; fi
+		;;
 	*)
 		set +e
 		"$@"
@@ -246,6 +259,7 @@ status=$?
 set -e
 [[ $status -eq 20 && $foreign_status == not-managed ]]
 [[ ! -e "$fixture_dir/var/lib/t14-len2068-touchpad-patch/native-state" ]]
+[[ ! -e "$fixture_dir/run/t14-len2068-touchpad-patch/grub-2b35be97-3acf-4fde-8fa4-9961c3202da2" ]]
 set +e
 TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
 	TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT=1 \
@@ -259,10 +273,85 @@ grep -Fq 'Active EFI entry' "$case_dir/output" || grep -Fq 'active EFI entry' "$
 grep -Fq 'current linuxmint installation is booted through Fedora GRUB via an os-prober-generated entry' "$case_dir/output"
 grep -Fq 'cannot be modified safely from the running installation' "$case_dir/output"
 grep -Fq 'mount -o ro --' "$privileged_trace"
+grep -Fq 'findmnt -rn -S' "$privileged_trace"
 grep -Fq 'umount --' "$privileged_trace"
 grep -Fq 'cat --' "$privileged_trace"
+[[ ! -e "$fixture_dir/run/t14-len2068-touchpad-patch/grub-2b35be97-3acf-4fde-8fa4-9961c3202da2" ]]
 [[ ! -e "$trace_file" ]]
 if grep -Fq 'psmouse.synaptics_intertouch=0' "$fixture_dir/etc/default/grub"; then exit 1; fi
+
+# An already-mounted active GRUB filesystem is reused without a temporary mount.
+: >"$privileged_trace"
+set +e
+mounted_output=$(env PATH="$fake_bin:$PATH" \
+	TOUCHPAD_PATCHER_TESTING=1 \
+	TOUCHPAD_PATCHER_TEST_ROOT="$fixture_dir" \
+	TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
+	TOUCHPAD_PATCHER_TEST_UNAME_R=6.8.0-85-generic \
+	TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT=1 \
+	TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-chain-run" \
+	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
+	TOUCHPAD_TEST_FINDMNT_MODE=mounted \
+	TOUCHPAD_TEST_EXISTING_MOUNT="$fixture_dir/devices/2b35be97-3acf-4fde-8fa4-9961c3202da2" \
+	TOUCHPAD_PATCHER_BOOT_MANAGER=grub \
+	"$repo_dir/scripts/t14-ps2-native-manager.sh" --yes apply 2>&1)
+status=$?
+set -e
+[[ $status -eq 1 ]]
+grep -Fq 'active GRUB filesystem already mounted' <<<"$mounted_output"
+if grep -Fq 'mount -o ro --' "$privileged_trace"; then exit 1; fi
+
+# A failed temporary mount remains fatal, is cleaned, and never starts fallback.
+: >"$privileged_trace"
+set +e
+TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
+	TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT=1 \
+	TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-chain-run" \
+	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
+	TOUCHPAD_TEST_MOUNT_FAIL=1 \
+	run_launcher "$case_dir/mount-failure-output"
+status=$?
+set -e
+[[ $status -eq 1 ]]
+grep -Fq 'could not be mounted read-only' "$case_dir/mount-failure-output"
+[[ ! -e "$trace_file" ]]
+[[ ! -e "$fixture_dir/run/t14-len2068-touchpad-patch/grub-2b35be97-3acf-4fde-8fa4-9961c3202da2" ]]
+
+# A genuine findmnt error is fatal and is not treated as "not mounted".
+: >"$privileged_trace"
+set +e
+TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
+	TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT=1 \
+	TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-chain-run" \
+	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
+	TOUCHPAD_TEST_FINDMNT_MODE=error \
+	run_launcher "$case_dir/findmnt-failure-output"
+status=$?
+set -e
+[[ $status -eq 1 ]]
+grep -Fq 'findmnt failed while inspecting the active GRUB device' "$case_dir/findmnt-failure-output"
+if grep -Fq 'mount -o ro --' "$privileged_trace"; then exit 1; fi
+[[ ! -e "$trace_file" ]]
+
+# TERM after a successful mount still runs the EXIT cleanup and removes it.
+: >"$privileged_trace"
+set +e
+env PATH="$fake_bin:$PATH" \
+	TOUCHPAD_PATCHER_TESTING=1 \
+	TOUCHPAD_PATCHER_TEST_ROOT="$fixture_dir" \
+	TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
+	TOUCHPAD_PATCHER_TEST_UNAME_R=6.8.0-85-generic \
+	TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT=1 \
+	TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-chain-run" \
+	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
+	TOUCHPAD_TEST_SIGNAL_AFTER_MOUNT=1 \
+	TOUCHPAD_PATCHER_BOOT_MANAGER=grub \
+	"$repo_dir/scripts/t14-ps2-native-manager.sh" --yes apply >"$case_dir/signal-output" 2>&1
+status=$?
+set -e
+[[ $status -eq 143 ]]
+grep -Fq 'umount --' "$privileged_trace"
+[[ ! -e "$fixture_dir/run/t14-len2068-touchpad-patch/grub-2b35be97-3acf-4fde-8fa4-9961c3202da2" ]]
 chmod u+rwx "$fixture_dir/boot/efi"
 
 # The inverse arrangement is also traced: Fedora may run through Ubuntu GRUB.
