@@ -195,7 +195,7 @@ detect_platform() {
 		*fedora*|*rhel*) adapter=fedora; adapter_label='Fedora/RHEL' ;;
 		*debian*|*ubuntu*) adapter=debian; adapter_label='Debian/Ubuntu/Linux Mint' ;;
 		*arch*) adapter=arch; adapter_label='Arch Linux' ;;
-		*suse*|*opensuse*) adapter=suse; adapter_label='openSUSE' ;;
+		*suse*) adapter=suse; adapter_label='openSUSE' ;;
 		*) adapter=generic; adapter_label='Generic systemd Linux' ;;
 	esac
 	detail "distribution id='$distro_id' id_like='$distro_like' adapter='$adapter'"
@@ -295,6 +295,7 @@ dependency_packages_debian() {
 	local compiler_package
 	dependency_packages=(
 		build-essential binutils bc bison flex gawk pkg-config perl python3
+		coreutils findutils grep sed diffutils file
 		tar xz-utils gzip bzip2 zstd lz4 lzop curl ca-certificates
 		openssl libssl-dev libelf-dev libdw-dev zlib1g-dev libzstd-dev
 		liblz4-dev liblzo2-dev libncurses-dev dwarves rsync cpio kmod
@@ -316,6 +317,7 @@ dependency_packages_debian() {
 dependency_packages_fedora() {
 	dependency_packages=(
 		gcc gcc-c++ make binutils bc bison flex gawk pkgconf-pkg-config perl python3
+		coreutils findutils grep sed diffutils file
 		tar xz gzip bzip2 zstd lz4 lzop curl ca-certificates openssl openssl-devel
 		elfutils-libelf-devel elfutils-devel zlib-devel libzstd-devel lz4-devel
 		lzo-devel ncurses-devel dwarves rsync cpio kmod dracut grubby mokutil
@@ -327,7 +329,7 @@ dependency_packages_fedora() {
 
 dependency_packages_arch() {
 	dependency_packages=(
-		base-devel bc bison flex gawk pkgconf perl python tar xz gzip bzip2 zstd lz4
+		base-devel bc bison flex gawk pkgconf perl python coreutils findutils grep sed diffutils file tar xz gzip bzip2 zstd lz4
 		lzo curl ca-certificates openssl libelf zlib ncurses pahole rsync cpio
 		kmod mkinitcpio grub mokutil
 	)
@@ -337,7 +339,8 @@ dependency_packages_arch() {
 
 dependency_packages_suse() {
 	dependency_packages=(
-		gcc gcc-c++ make binutils bc bison flex gawk pkg-config perl python3 tar xz
+		gcc gcc-c++ make binutils bc bison flex gawk pkg-config perl python3
+		coreutils findutils grep sed diffutils file tar xz
 		gzip bzip2 zstd lz4 lzo curl ca-certificates openssl libopenssl-devel
 		libelf-devel libdw-devel zlib-devel libzstd-devel liblz4-devel
 		liblzo2-devel ncurses-devel dwarves rsync cpio kmod dracut grub2 mokutil
@@ -381,7 +384,8 @@ verify_build_requirements() {
 	local command header
 	local -a missing_commands missing_headers
 	local -a required_commands=(
-		bash make gcc ld as objcopy bc bison flex awk gawk perl python3 tar xz curl
+		bash make gcc ld as objcopy bc bison flex awk gawk perl python3
+		find grep sed sort head tr diff file tar xz gzip bzip2 zstd lz4 lzop curl
 		openssl pkg-config rsync cpio depmod sha256sum
 	)
 	local -a required_headers=(
@@ -703,6 +707,9 @@ find_grub_config() {
 
 grub_entry_identifier() {
 	local config_copy="$work_dir/.grub-config-$$"
+	# sudo is intentionally limited to reading the protected GRUB file; the
+	# redirected audit copy belongs to the invoking user in the quoted work dir.
+	# shellcheck disable=SC2024
 	sudo cat "$grub_config" >"$config_copy" || return 1
 	python3 - "$config_copy" "$built_release" <<'PY'
 import shlex
@@ -881,7 +888,7 @@ uninstall_kernel() {
 	status_ok "Removed only $release; stock kernels were untouched"
 }
 
-detail "installer version=$tool_version action=$action verbose=$verbose dry_run=$dry_run"
+detail "installer version=$tool_version action=$action verbose=$verbose dry_run=$dry_run keep_build=$keep_build"
 case "$action" in
 	preflight) preflight ;;
 	build) preflight; build_kernel ;;

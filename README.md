@@ -18,7 +18,9 @@ git switch --create stable-v2.0.0 v2.0.0
 ```
 
 Use `--verbose` for live command output. Every run retains a timestamped log
-under `logs/`.
+under `logs/`. Repository, cache, log, and configuration paths containing
+spaces are supported; the documented `Touchpad Patcher` directory is covered
+by the integration tests.
 
 ## How version 2 works
 
@@ -150,5 +152,13 @@ Fedora's custom-kernel route has been validated end to end. Version 2's native
 boot-manager adapters are structurally tested but need broader physical testing
 across distributions. Submit sanitized results using the repository's
 [distribution test report](https://github.com/RavenWearne/thinkpad-synaptics-patch/issues/new?template=distro-test.yml).
+
+Maintainers can run the regression suite with:
+
+```bash
+python3 -m unittest -v tests/test_kernel_arg.py tests/test_dependencies.py
+./tests/test_native_manager.sh
+./tests/test_launcher_integration.sh
+```
 
 See [CHANGELOG.md](CHANGELOG.md) for release changes.

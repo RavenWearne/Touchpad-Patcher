@@ -22,4 +22,6 @@ scripts/*
 !tests/
 tests/*
 !tests/test_kernel_arg.py
+!tests/test_dependencies.py
+!tests/test_launcher_integration.sh
 !tests/test_native_manager.sh

@@ -84,7 +84,7 @@ detect_boot_manager() {
 	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 && -n ${TOUCHPAD_PATCHER_BOOT_MANAGER:-} ]]; then
 		boot_manager=$TOUCHPAD_PATCHER_BOOT_MANAGER
 	else
-		local boot_status= current_label=
+		local boot_status='' current_label=''
 		if command -v bootctl >/dev/null; then boot_status=$(bootctl status 2>/dev/null || true); fi
 		if grep -qi 'product:.*systemd-boot' <<<"$boot_status"; then
 			boot_manager=systemd-boot
@@ -114,7 +114,7 @@ detect_boot_manager() {
 
 detect_adapter() {
 	detect_boot_manager
-	local os_file distro_id= distro_like=
+	local os_file distro_id='' distro_like=''
 	os_file=$(root_path /etc/os-release)
 	if [[ -r "$os_file" ]]; then
 		# shellcheck disable=SC1090
@@ -170,7 +170,7 @@ state_write() {
 	state_dir=$(root_path /var/lib/t14-len2068-touchpad-patch)
 	state_file=$state_dir/native-state
 	sudo_run mkdir -p "$state_dir"
-	printf 'method=native\nadapter=%s\nboot_manager=%s\nconfig_path=%s\nprior_conflict=%s\nstatus=pending-verification\n' \
+	printf 'method=native\nadapter=%q\nboot_manager=%q\nconfig_path=%q\nprior_conflict=%q\nstatus=pending-verification\n' \
 		"$adapter" "$boot_manager" "$config_path" "$prior_conflict" | sudo_run tee "$state_file" >/dev/null
 }
 
@@ -299,6 +299,7 @@ complete_rollback() {
 	log 'native rollback verified and patcher state cleared'
 }
 
+detail "native manager version=$tool_version action=$action"
 case "$action" in
 	preflight) hardware_guard; detect_adapter; kernel_supports_parameter || exit 20; log 'native route supported' ;;
 	status) native_status ;;

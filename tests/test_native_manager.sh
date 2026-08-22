@@ -44,7 +44,7 @@ output=$("$manager" verify)
 grep -q 'native stock-kernel fix verified' <<<"$output"
 output=$("$manager" rollback)
 grep -q 'native parameter removed' <<<"$output"
-! grep -q 'psmouse.synaptics_intertouch=0' "$fixture/boot/refind_linux.conf"
+if grep -q 'psmouse.synaptics_intertouch=0' "$fixture/boot/refind_linux.conf"; then exit 1; fi
 
 printf '%s\n' 'quiet' >"$fixture/proc/cmdline"
 output=$("$manager" complete-rollback)

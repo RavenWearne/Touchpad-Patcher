@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Fix native-manager execution when the repository path contains spaces,
+  including the documented `Touchpad Patcher` clone directory.
+- Add physical-flow regression coverage for Linux Mint 22.3 with GRUB:
+  native application, existing native state, rollback, unsupported fallback,
+  and unexpected application failure without automatic fallback.
+- Lock down fallback-only dependency gating and require `gawk` plus the audited
+  archive/build command set before reporting build readiness.
+
 ## 2.0.0
 
 - Prefer the stock distribution kernel with

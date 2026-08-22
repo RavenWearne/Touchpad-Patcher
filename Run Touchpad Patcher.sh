@@ -3,6 +3,7 @@ set -euo pipefail
 
 terminal_child=0
 verbose=0
+testing=${TOUCHPAD_PATCHER_TESTING:-0}
 launcher_args=("$@")
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -13,7 +14,7 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-if (( ! terminal_child )) && [[ ! -t 0 ]]; then
+if (( ! testing && ! terminal_child )) && [[ ! -t 0 ]]; then
 	if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v konsole >/dev/null; then
 		exec konsole -e bash "$0" --terminal-child "${launcher_args[@]}"
 	elif [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v gnome-terminal >/dev/null; then
@@ -85,15 +86,21 @@ ask_choice() {
 [[ -x "$installer" && -x "$native_manager" ]] || { printf 'Required patcher components are missing or not executable.\n' >&2; exit 1; }
 printf '%s\n' 'ThinkPad T14 Gen 1 LEN2068 Touchpad Patcher v2.0.0'
 printf '%s\n\n' 'The stock-kernel boot parameter is preferred; a custom kernel is the guarded fallback.'
-printf '%s\n' 'Administrator authentication is required to manage boot configuration or kernels.'
-sudo -v
-while true; do sudo -n true 2>/dev/null || exit; sleep 50; done &
-sudo_keeper=$!
+if (( ! testing )); then
+	printf '%s\n' 'Administrator authentication is required to manage boot configuration or kernels.'
+	sudo -v
+	while true; do sudo -n true 2>/dev/null || exit; sleep 50; done &
+	sudo_keeper=$!
+fi
 
 native_args=()
 installer_common=(--log-file "$log_file")
 (( verbose )) && { native_args+=(--verbose); installer_common+=(--verbose); }
-running=$(uname -r)
+if (( testing )); then
+	running=${TOUCHPAD_PATCHER_TEST_UNAME_R:?}
+else
+	running=$(uname -r)
+fi
 
 if [[ "$running" == *"-$suffix" || "$running" == *"-$legacy_suffix" ]]; then
 	rm -f -- "${XDG_CACHE_HOME:-$HOME/.cache}/t14-len2068-touchpad-patch/.custom-pending-verification"
@@ -140,7 +147,7 @@ if [[ -r "$pending_custom" ]]; then
 fi
 
 set +e
-native_state=$($native_manager "${native_args[@]}" status 2>>"$log_file")
+native_state=$("$native_manager" "${native_args[@]}" status 2>>"$log_file")
 native_status=$?
 set -e
 detail "native status=$native_status state='$native_state'"
