@@ -38,7 +38,11 @@ need() { command -v "$1" >/dev/null || die "required command not found: $1"; }
 read_dmi() { [[ -r "/sys/class/dmi/id/$1" ]] && tr -d '\n' <"/sys/class/dmi/id/$1" || true; }
 
 sudo_run() {
-	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then "$@"; else sudo "$@"; fi
+	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then
+		if [[ -n ${TOUCHPAD_PATCHER_TEST_SUDO_RUNNER:-} ]]; then "$TOUCHPAD_PATCHER_TEST_SUDO_RUNNER" "$@"; else "$@"; fi
+	else
+		sudo "$@"
+	fi
 }
 
 root_path() {
@@ -149,10 +153,17 @@ regenerate() {
 	case "$adapter" in
 		grubby) return ;;
 		grub)
-			if command -v update-grub >/dev/null; then sudo_run update-grub
-			elif command -v grub2-mkconfig >/dev/null && candidate_exists /boot/grub2; then sudo_run grub2-mkconfig -o "$(root_path /boot/grub2/grub.cfg)"
-			elif command -v grub-mkconfig >/dev/null && candidate_exists /boot/grub; then sudo_run grub-mkconfig -o "$(root_path /boot/grub/grub.cfg)"
+			if command -v update-grub >/dev/null; then
+				grub_generated_config=$(root_path /boot/grub/grub.cfg)
+				sudo_run update-grub
+			elif command -v grub2-mkconfig >/dev/null && candidate_exists /boot/grub2; then
+				grub_generated_config=$(root_path /boot/grub2/grub.cfg)
+				sudo_run grub2-mkconfig -o "$grub_generated_config"
+			elif command -v grub-mkconfig >/dev/null && candidate_exists /boot/grub; then
+				grub_generated_config=$(root_path /boot/grub/grub.cfg)
+				sudo_run grub-mkconfig -o "$grub_generated_config"
 			else die 'the active GRUB installation has no supported regeneration command'; fi
+			log 'GRUB configuration updated'
 			;;
 		cachyos-systemd-boot) need sdboot-manage; sudo_run sdboot-manage gen ;;
 		systemd-boot)
@@ -192,19 +203,92 @@ config_contains_token() {
 	fi
 }
 
-generated_contains_token() {
+grub_generated_token_status() {
+	local candidate content
+	local found_config=0 unreadable=0
+	local -A checked=()
+	local -a candidates=()
+	[[ -z ${grub_generated_config:-} ]] || candidates+=("$grub_generated_config")
+	candidates+=(
+		"$(root_path /boot/grub/grub.cfg)"
+		"$(root_path /boot/grub2/grub.cfg)"
+		"$(root_path /etc/grub2.cfg)"
+		"$(root_path /etc/grub2-efi.cfg)"
+	)
+	grub_checked_paths=
+	grub_unreadable_paths=
+	for candidate in "${candidates[@]}"; do
+		[[ -n "$candidate" && -z ${checked[$candidate]:-} ]] || continue
+		checked[$candidate]=1
+		grub_checked_paths+="${grub_checked_paths:+, }$candidate"
+		[[ -e "$candidate" ]] || continue
+		found_config=1
+		if ! content=$(sudo_run cat -- "$candidate" 2>/dev/null); then
+			unreadable=1
+			grub_unreadable_paths+="${grub_unreadable_paths:+, }$candidate"
+			continue
+		fi
+		if awk -v required="$token" '
+			/^[[:space:]]*(linux|linuxefi|linux16)[[:space:]]/ {
+				for (field = 1; field <= NF; field++)
+					if ($field == required) found = 1
+			}
+			END { exit(found ? 0 : 1) }
+		' <<<"$content"; then
+			grub_verified_path=$candidate
+			return 0
+		fi
+	done
+	(( found_config )) || return 3
+	(( ! unreadable )) || return 2
+	return 1
+}
+
+verify_generated_contains_token() {
 	case "$adapter" in
-		grubby) grubby --info=ALL 2>/dev/null | grep -Fq "$token" ;;
+		grubby) grubby --info=ALL 2>/dev/null | grep -Fq "$token" || die 'generated boot entries do not contain the native parameter' ;;
 		grub)
-			local generated
-			for generated in "$(root_path /boot/grub/grub.cfg)" "$(root_path /boot/grub2/grub.cfg)"; do
-				if [[ -r "$generated" ]] && grep -Fq "$token" "$generated"; then return 0; fi
-			done
-			return 1
+			local status
+			if grub_generated_token_status; then status=0; else status=$?; fi
+			case "$status" in
+				0) log "generated GRUB kernel entries verified: $grub_verified_path" ;;
+				1) die "generated GRUB kernel command lines do not contain the exact argument '$token' (checked: $grub_checked_paths)" ;;
+				2) die "generated GRUB configuration could not be read with administrator privileges: $grub_unreadable_paths" ;;
+				3) die "generated GRUB configuration was not found (checked: $grub_checked_paths)" ;;
+			esac
 			;;
-		cachyos-systemd-boot|systemd-boot) grep -RFq "$token" "$(root_path /boot/loader/entries)" 2>/dev/null ;;
-		limine) grep -Fq "$token" "$(root_path /boot/limine.conf)" 2>/dev/null ;;
-		refind) grep -Fq "$token" "$config_path" ;;
+		cachyos-systemd-boot|systemd-boot) grep -RFq "$token" "$(root_path /boot/loader/entries)" 2>/dev/null || die 'generated boot entries do not contain the native parameter' ;;
+		limine) grep -Fq "$token" "$(root_path /boot/limine.conf)" 2>/dev/null || die 'generated boot entries do not contain the native parameter' ;;
+		refind) grep -Fq "$token" "$config_path" || die 'generated boot entries do not contain the native parameter' ;;
+	esac
+}
+
+verify_generated_absent_token() {
+	case "$adapter" in
+		grubby)
+			if grubby --info=ALL 2>/dev/null | grep -Fq "$token"; then die 'generated boot entries still contain the native parameter after rollback'; fi
+			return 0
+			;;
+		cachyos-systemd-boot|systemd-boot)
+			if grep -RFq "$token" "$(root_path /boot/loader/entries)" 2>/dev/null; then die 'generated boot entries still contain the native parameter after rollback'; fi
+			return 0
+			;;
+		limine)
+			if grep -Fq "$token" "$(root_path /boot/limine.conf)" 2>/dev/null; then die 'generated boot entries still contain the native parameter after rollback'; fi
+			return 0
+			;;
+		refind)
+			if grep -Fq "$token" "$config_path"; then die 'generated boot entries still contain the native parameter after rollback'; fi
+			return 0
+			;;
+	esac
+	local status
+	if grub_generated_token_status; then status=0; else status=$?; fi
+	case "$status" in
+		0) die 'generated GRUB kernel entries still contain the native parameter after rollback' ;;
+		1) log 'generated GRUB kernel entries verified without the native parameter' ;;
+		2) die "generated GRUB configuration could not be read with administrator privileges: $grub_unreadable_paths" ;;
+		3) die "generated GRUB configuration was not found (checked: $grub_checked_paths)" ;;
 	esac
 }
 
@@ -212,8 +296,9 @@ apply_native() {
 	hardware_guard
 	detect_adapter
 	kernel_supports_parameter || return 20
+	log 'stock kernel supports the native touchpad parameter'
 	if config_contains_token; then
-		generated_contains_token || die 'native parameter is configured but absent from generated boot entries'
+		verify_generated_contains_token
 		state_write 0
 		log 'existing native parameter adopted for verification; reboot if it is not active yet'
 		return 0
@@ -235,9 +320,10 @@ apply_native() {
 		[[ -z "$config_variable" ]] || command+=("$config_variable")
 		sudo_run "${command[@]}"
 	fi
+	log 'native touchpad parameter configured'
 	regenerate
 	config_contains_token || die 'boot configuration regeneration did not retain the native parameter'
-	generated_contains_token || die 'generated boot entries do not contain the native parameter'
+	verify_generated_contains_token
 	state_write "$prior_conflict"
 	log 'native parameter installed and verified in boot configuration; reboot required'
 }
@@ -276,7 +362,7 @@ rollback_native() {
 	fi
 	regenerate
 	config_contains_token && die 'rollback did not remove the native parameter from boot configuration'
-	generated_contains_token && die 'generated boot entries still contain the native parameter after rollback'
+	verify_generated_absent_token
 	sudo_run sed -i 's/^status=.*/status=rollback-pending-reboot/' "$state_file"
 	log 'native parameter removed from boot configuration; reboot required to complete rollback'
 }

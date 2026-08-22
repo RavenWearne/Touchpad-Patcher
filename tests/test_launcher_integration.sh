@@ -25,7 +25,10 @@ make_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 [[ ${TOUCHPAD_TEST_UPDATE_GRUB_FAIL:-0} != 1 ]] || exit 42
-cp -- "$TOUCHPAD_PATCHER_TEST_ROOT/etc/default/grub" "$TOUCHPAD_PATCHER_TEST_ROOT/boot/grub/grub.cfg"
+# shellcheck disable=SC1091
+. "$TOUCHPAD_PATCHER_TEST_ROOT/etc/default/grub"
+printf '    linux /boot/vmlinuz-test root=UUID=test ro %s $vt_handoff\n' "$GRUB_CMDLINE_LINUX_DEFAULT" \
+	>"$TOUCHPAD_PATCHER_TEST_ROOT/boot/grub/grub.cfg"
 SH
 	chmod +x "$fake_bin/update-grub"
 
@@ -57,7 +60,7 @@ printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouc
 run_launcher "$case_dir/output"
 grep -Fq 'Native fix installed' "$case_dir/output"
 grep -Fq 'psmouse.synaptics_intertouch=0' "$fixture_dir/etc/default/grub"
-grep -Fq 'psmouse.synaptics_intertouch=0' "$fixture_dir/boot/grub/grub.cfg"
+grep -Fq 'linux /boot/vmlinuz-test root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0 $vt_handoff' "$fixture_dir/boot/grub/grub.cfg"
 [[ ! -e "$trace_file" ]] # Native success must not touch build dependencies/fallback.
 
 # The same Mint/GRUB installation rolls back through the manager path with spaces.
@@ -75,10 +78,66 @@ if grep -Fq 'psmouse.synaptics_intertouch=0' "$fixture_dir/boot/grub/grub.cfg"; 
 make_case native-active
 printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
 printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash psmouse.synaptics_intertouch=0"' >"$fixture_dir/etc/default/grub"
-cp -- "$fixture_dir/etc/default/grub" "$fixture_dir/boot/grub/grub.cfg"
+printf '%s\n' '    linux /boot/vmlinuz-test root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0 $vt_handoff' >"$fixture_dir/boot/grub/grub.cfg"
 printf '%s\n' 'quiet splash psmouse.synaptics_intertouch=0' >"$fixture_dir/proc/cmdline"
 run_launcher "$case_dir/output"
 grep -Fq 'Native fix kept' "$case_dir/output"
+[[ ! -e "$trace_file" ]]
+
+# A root-only generated GRUB file is verified through the privileged reader.
+make_case root-only-grub
+printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
+printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash psmouse.synaptics_intertouch=0"' >"$fixture_dir/etc/default/grub"
+printf '%s\n' '    linux /boot/vmlinuz-test root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0 $vt_handoff' >"$fixture_dir/boot/grub/grub.cfg"
+chmod 000 "$fixture_dir/boot/grub/grub.cfg"
+if cat "$fixture_dir/boot/grub/grub.cfg" >/dev/null 2>&1; then exit 1; fi
+cat >"$fake_bin/privileged-run" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${1:-} == cat ]]; then
+	target=${!#}
+	chmod u+r "$target"
+	set +e
+	"$@"
+	status=$?
+	set -e
+	chmod 000 "$target"
+	exit "$status"
+fi
+"$@"
+SH
+chmod +x "$fake_bin/privileged-run"
+run_launcher "$case_dir/output" TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-run"
+grep -Fq 'generated GRUB kernel entries verified' "$case_dir/output"
+grep -Fq 'Native fix installed' "$case_dir/output"
+[[ ! -e "$trace_file" ]]
+
+# A privileged read failure is explicit and never becomes "parameter absent".
+make_case unreadable-grub
+printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
+printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash psmouse.synaptics_intertouch=0"' >"$fixture_dir/etc/default/grub"
+printf '%s\n' '    linux /boot/vmlinuz-test root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0' >"$fixture_dir/boot/grub/grub.cfg"
+chmod 000 "$fixture_dir/boot/grub/grub.cfg"
+if cat "$fixture_dir/boot/grub/grub.cfg" >/dev/null 2>&1; then exit 1; fi
+set +e
+run_launcher "$case_dir/output"
+status=$?
+set -e
+[[ $status -eq 1 ]]
+grep -Fq 'generated GRUB configuration could not be read with administrator privileges' "$case_dir/output"
+[[ ! -e "$trace_file" ]]
+
+# A readable file must contain the exact token on a generated kernel command.
+make_case token-not-on-linux-command
+printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
+printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash psmouse.synaptics_intertouch=0"' >"$fixture_dir/etc/default/grub"
+printf '%s\n' '# psmouse.synaptics_intertouch=0' '    linux /boot/vmlinuz-test root=UUID=test ro quiet splash' >"$fixture_dir/boot/grub/grub.cfg"
+set +e
+run_launcher "$case_dir/output"
+status=$?
+set -e
+[[ $status -eq 1 ]]
+grep -Fq "generated GRUB kernel command lines do not contain the exact argument 'psmouse.synaptics_intertouch=0'" "$case_dir/output"
 [[ ! -e "$trace_file" ]]
 
 # A genuinely unsupported kernel reaches the custom fallback offer/path.

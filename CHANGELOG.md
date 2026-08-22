@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Verify generated GRUB kernel command lines through an administrator-readable
+  configuration stream, fixing false failures when Mint protects
+  `/boot/grub/grub.cfg` from ordinary users.
+- Distinguish missing GRUB output, privileged read failures, and readable
+  output that lacks the exact `psmouse.synaptics_intertouch=0` kernel argument.
+- Add regressions for root-only GRUB configuration, exact generated `linux`
+  argument matching, and fail-closed verification errors.
+
 ## 2.0.1
 
 - Fix native-manager execution when the repository path contains spaces,
