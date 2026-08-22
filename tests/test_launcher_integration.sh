@@ -251,7 +251,8 @@ if grep -Fq 'JSONDecodeError' "$case_dir/output"; then exit 1; fi
 if grep -Fq '[native]' "$case_dir/output"; then exit 1; fi
 if grep -Fq 'Apply native' "$case_dir/output"; then exit 1; fi
 grep -RFq '[native] active boot manager:' "$repo_dir/logs"
-grep -Fq 'Touchpad patch installed' "$case_dir/output"
+grep -Fq 'Linux Mint 22.3 patched' "$case_dir/output"
+grep -Fq 'Reboot Linux Mint 22.3 for runtime verification' "$case_dir/output"
 grep -Fq 'psmouse.synaptics_intertouch=0' "$fixture_dir/etc/default/grub"
 grep -Fq 'linux /boot/vmlinuz-6.8.0-85-generic root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0 $vt_handoff' "$fixture_dir/boot/grub/grub.cfg"
 [[ ! -e "$trace_file" ]] # Native success must not touch build dependencies/fallback.
@@ -295,7 +296,7 @@ set -e
 grep -Fq 'stale native state cleared' "$case_dir/stale-error"
 [[ ! -e "$fixture_dir/var/lib/t14-len2068-touchpad-patch/native-state" ]]
 run_launcher "$case_dir/second-output"
-grep -Fq 'Touchpad patch installed' "$case_dir/second-output"
+grep -Fq 'Linux Mint 22.3 patched' "$case_dir/second-output"
 
 # Multiple GRUB installations are safe when BootCurrent resolves to Mint/Ubuntu.
 make_case active-ubuntu-chain
@@ -304,7 +305,7 @@ enable_uefi 0003 Ubuntu ubuntu 0001 Fedora fedora
 run_launcher "$case_dir/install-output"
 if grep -Fq 'active GRUB chain traced:' "$case_dir/install-output"; then exit 1; fi
 grep -RFq 'active GRUB chain traced:' "$repo_dir/logs"
-grep -Fq 'Touchpad patch installed' "$case_dir/install-output"
+grep -Fq 'Linux Mint 22.3 patched' "$case_dir/install-output"
 printf '%s\n' 'quiet splash psmouse.synaptics_intertouch=0' >"$fixture_dir/proc/cmdline"
 run_launcher "$case_dir/reboot-output"
 grep -Fq 'This system is fully patched' "$case_dir/reboot-output"
@@ -525,7 +526,7 @@ TOUCHPAD_PATCHER_TEST_ROOT_UUID=f6908430-c988-4184-bfe7-6dde012943a9 \
 grep -Fq 'Fedora stock kernels patched' "$case_dir/output"
 grep -Fq 'Linux Mint 22.3 detected — touchpad patch required' "$case_dir/output"
 grep -Fq 'Linux Mint 22.3 patched' "$case_dir/output"
-grep -Fq 'Reboot into each newly patched system for runtime verification' "$case_dir/output"
+grep -Fq 'Boot Linux Mint 22.3 for runtime verification' "$case_dir/output"
 managed_cross_script="$fixture_dir/etc/grub.d/29_t14_len2068_touchpad"
 [[ -x "$managed_cross_script" ]]
 grep -Fq 'Managed by ThinkPad T14 LEN2068 Touchpad Patcher' "$managed_cross_script"
@@ -653,7 +654,7 @@ fi
 SH
 chmod +x "$fake_bin/privileged-run"
 run_launcher "$case_dir/output" TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-run"
-grep -Fq 'Touchpad patch installed' "$case_dir/output"
+grep -Fq 'Linux Mint 22.3 patched' "$case_dir/output"
 [[ ! -e "$trace_file" ]]
 
 # A privileged read failure is explicit and never becomes "parameter absent".
@@ -693,7 +694,7 @@ TOUCHPAD_PATCHER_TEST_UNAME_R=7.1.8-t14ps2quirk1 run_launcher "$case_dir/output"
 grep -Fq 'Kernel-level touchpad patch active' "$case_dir/output"
 grep -Fq 'SynPS/2 touchpad verified' "$case_dir/output"
 grep -Fq 'Existing patched kernel preserved' "$case_dir/output"
-grep -Fq 'Touchpad patch installed' "$case_dir/output"
+grep -Fq 'Linux Mint patched' "$case_dir/output"
 grep -Fq 'verify' "$trace_file"
 if grep -Fq ' all' "$trace_file"; then exit 1; fi
 

@@ -14,7 +14,7 @@ launcher verifies, retains, and rolls back either method.
 ```bash
 git clone --no-checkout https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
 cd "Touchpad Patcher"
-git switch --create stable-v3.1.1 v3.1.1
+git switch --create stable-v3.2.0 v3.2.0
 ./Run\ Touchpad\ Patcher.sh
 ```
 
@@ -59,6 +59,15 @@ The normal lifecycle is:
    and the native TM3471 RMI4 input device is absent.
 8. Report configuration and runtime verification separately for each logical
    Linux installation.
+
+Successful runtime verification is recorded per installation in shared
+machine state on the active EFI system partition. This lets Fedora remember a
+verified Mint boot and Mint remember a verified Fedora boot. The record is
+metadata only: it is accepted only while the root UUID, distribution, kernel,
+remediation method, active boot chain, and effective boot-target fingerprint
+still match. Live evidence for the running system and the authoritative
+generated entry for other systems always take priority; changed or removed
+remediation automatically returns that installation to pending or required.
 
 If the kernel lacks the parameter, the launcher offers the existing guarded
 custom-kernel build. If the parameter boots but does not produce the required

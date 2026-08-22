@@ -20,6 +20,7 @@ scripts/*
 !scripts/t14-ps2-foreign-grub.py
 !scripts/t14-ps2-machine-inventory.py
 !scripts/t14-ps2-user-summary.py
+!scripts/t14-ps2-verification-state.py
 !scripts/t14-ps2-kernel-installer.sh
 !scripts/t14-ps2-native-manager.sh
 !scripts/t14-ps2-patch-source.sh
@@ -31,5 +32,6 @@ tests/*
 !tests/test_foreign_grub.py
 !tests/test_machine_inventory.py
 !tests/test_user_summary.py
+!tests/test_verification_state.py
 !tests/test_launcher_integration.sh
 !tests/test_native_manager.sh

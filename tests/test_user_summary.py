@@ -25,6 +25,7 @@ class UserSummaryTests(unittest.TestCase):
                     "kernel_patched": True,
                     "native_configured": True,
                     "native_active": False,
+                    "runtime_verified": True,
                 },
                 {
                     "distribution": "Fedora",
@@ -34,6 +35,7 @@ class UserSummaryTests(unittest.TestCase):
                     "kernel_patched": False,
                     "native_configured": True,
                     "native_active": False,
+                    "runtime_verified": False,
                 },
                 {
                     "distribution": "Fedora",
@@ -43,6 +45,7 @@ class UserSummaryTests(unittest.TestCase):
                     "kernel_patched": False,
                     "native_configured": True,
                     "native_active": False,
+                    "runtime_verified": False,
                 },
                 {
                     "distribution": "Linux Mint 22.3",
@@ -52,6 +55,7 @@ class UserSummaryTests(unittest.TestCase):
                     "kernel_patched": False,
                     "native_configured": False,
                     "native_active": False,
+                    "runtime_verified": False,
                 },
             ]
         }
@@ -79,9 +83,37 @@ class UserSummaryTests(unittest.TestCase):
         self.assertNotIn("6.19.10-300.fc44.x86_64", output)
         self.assertEqual(1, output.count("Linux Mint 22.3"))
 
-    def test_complete_requires_every_kernel_target_to_be_patched(self):
+    def test_complete_requires_patching_and_per_installation_verification(self):
         self.assertFalse(MODULE.complete(self.data))
         self.data["installations"][-1]["native_configured"] = True
+        self.assertTrue(MODULE.patched_complete(self.data))
+        self.assertFalse(MODULE.complete(self.data))
+        self.data["installations"][-1]["runtime_verified"] = True
+        self.assertTrue(MODULE.complete(self.data))
+
+    def test_verified_other_os_has_no_reboot_instruction(self):
+        self.data["installations"][-1]["native_configured"] = True
+        self.data["installations"][-1]["runtime_verified"] = True
+        _, output = self.capture(MODULE.multi, self.data)
+        self.assertIn("✓ Linux Mint 22.3 patched", output)
+        self.assertNotIn("Boot Linux Mint", output)
+
+    def test_native_only_current_status_is_not_duplicated(self):
+        current = self.data["installations"][0]
+        current["kernel_patched"] = False
+        current["native_active"] = True
+        _, output = self.capture(MODULE.current, self.data)
+        self.assertEqual(1, output.count("Touchpad patch active"))
+        self.assertNotIn("Native touchpad patch active", output)
+
+    def test_both_installations_verified_have_no_pending_instruction(self):
+        mint = self.data["installations"][-1]
+        mint["native_configured"] = True
+        mint["runtime_verified"] = True
+        _, output = self.capture(MODULE.multi, self.data)
+        self.assertIn("✓ Fedora stock kernels patched", output)
+        self.assertIn("✓ Linux Mint 22.3 patched", output)
+        self.assertNotIn("runtime verification", output)
         self.assertTrue(MODULE.complete(self.data))
 
 

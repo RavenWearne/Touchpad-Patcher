@@ -110,6 +110,10 @@ inventory_complete() {
 	python3 "$user_summary" complete "$inventory_file"
 }
 
+inventory_patched() {
+	python3 "$user_summary" patched "$inventory_file"
+}
+
 apply_native_and_report() {
 	local apply_status
 	printf '\nApplying patches...\n'
@@ -121,11 +125,6 @@ apply_native_and_report() {
 		if (( current_kernel_patched )); then printf '✓ Existing patched kernel preserved\n'; fi
 		if ! collect_inventory; then concise_native_error; exit 1; fi
 		python3 "$user_summary" result "$inventory_file"
-		if inventory_complete; then
-			printf '\n✓ Touchpad patch installed\n○ Reboot into each newly patched system for runtime verification\n'
-		else
-			printf '\nSome detected Linux systems still require remediation through their authoritative bootloader.\n'
-		fi
 		finish 0
 	fi
 	if (( apply_status != 20 )); then
@@ -137,7 +136,7 @@ apply_native_and_report() {
 }
 
 [[ -x "$installer" && -x "$native_manager" && -x "$user_summary" ]] || { printf 'Required patcher components are missing or not executable.\n' >&2; exit 1; }
-printf '%s\n' 'ThinkPad T14 Gen 1 LEN2068 Touchpad Patcher v3.1.1'
+printf '%s\n' 'ThinkPad T14 Gen 1 LEN2068 Touchpad Patcher v3.2.0'
 if (( ! testing )); then
 	printf '\n%s\n' 'Administrator authentication is required to manage the touchpad patch.'
 	sudo -v
@@ -171,7 +170,9 @@ python3 "$user_summary" current "$inventory_file"
 if (( current_kernel_patched )); then
 	if run_logged "$installer" "${installer_common[@]}" verify; then
 		printf '✓ SynPS/2 touchpad verified\n'
+		run_logged "$native_manager" "${native_args[@]}" record-verification
 	else
+		run_logged "$native_manager" "${native_args[@]}" invalidate-verification || true
 		printf '✗ Current kernel patch did not produce the expected touchpad state.\n' >&2
 		printf 'No kernel was removed.\n' >&2
 		exit 1
@@ -210,14 +211,20 @@ detail "native status=$native_status state='$native_state'"
 
 if (( native_status == 0 )); then
 	if run_logged "$native_manager" "${native_args[@]}" verify; then
-		(( current_kernel_patched )) || printf '✓ Touchpad patch active\n✓ SynPS/2 touchpad verified\n'
+		(( current_kernel_patched )) || printf '✓ SynPS/2 touchpad verified\n'
+		if ! collect_inventory; then concise_native_error; exit 1; fi
 		python3 "$user_summary" multi "$inventory_file"
 		if inventory_complete; then
 			printf '\n✓ This system is fully patched.\n\nNo changes are required.\n'
 			finish 0
 		fi
+		if inventory_patched; then
+			printf '\nAll detected Linux systems are patched. The listed runtime verification is still pending.\n'
+			finish 0
+		fi
 		apply_native_and_report || true
 	fi
+	run_logged "$native_manager" "${native_args[@]}" invalidate-verification || true
 	printf '\nThe active touchpad patch did not produce the expected SynPS/2 state.\n'
 	choice=$(ask_choice 'Roll it back and build the custom fallback kernel? [Y/n] ' y)
 	if [[ "${choice,,}" == n* ]]; then finish 1; fi
@@ -230,8 +237,7 @@ elif (( native_status == 10 )); then
 		finish 0
 	fi
 	python3 "$user_summary" multi "$inventory_file"
-	if ! inventory_complete; then apply_native_and_report || true; fi
-	printf '\n✓ Touchpad patch installed\n○ Reboot to activate and verify it\n'
+	if ! inventory_patched; then apply_native_and_report || true; fi
 	finish 0
 elif (( native_status != 20 )); then
 	concise_native_error

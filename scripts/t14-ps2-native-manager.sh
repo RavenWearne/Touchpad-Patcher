@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=3.1.1
+tool_version=3.2.0
 token=psmouse.synaptics_intertouch=0
 conflict=psmouse.synaptics_intertouch=1
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -9,6 +9,7 @@ editor="$project_dir/scripts/t14-ps2-kernel-arg.py"
 grub_entry_helper="$project_dir/scripts/t14-ps2-grub-entry.py"
 machine_inventory_helper="$project_dir/scripts/t14-ps2-machine-inventory.py"
 foreign_grub_helper="$project_dir/scripts/t14-ps2-foreign-grub.py"
+verification_state_helper="$project_dir/scripts/t14-ps2-verification-state.py"
 state_dir=/var/lib/t14-len2068-touchpad-patch
 state_file=$state_dir/native-state
 verbose=0
@@ -49,7 +50,7 @@ trap 'exit 143' TERM
 
 usage() {
 	cat <<EOF
-Usage: $0 [--verbose] [--yes] [inventory|preflight|status|apply|verify|rollback-capability|rollback|complete-rollback]
+Usage: $0 [--verbose] [--yes] [inventory|preflight|status|apply|verify|record-verification|invalidate-verification|rollback-capability|rollback|complete-rollback]
 
 Prefer the stock distribution kernel by managing psmouse.synaptics_intertouch=0
 through the active boot manager. No kernel is compiled by this tool.
@@ -61,7 +62,7 @@ while [[ $# -gt 0 ]]; do
 		--verbose) verbose=1; shift ;;
 		--yes) assume_yes=1; shift ;;
 		-h|--help) usage; exit 0 ;;
-		inventory|preflight|status|apply|verify|rollback-capability|rollback|complete-rollback) action=$1; shift ;;
+		inventory|preflight|status|apply|verify|record-verification|invalidate-verification|rollback-capability|rollback|complete-rollback) action=$1; shift ;;
 		*) usage >&2; printf 'Unknown argument: %s\n' "$1" >&2; exit 2 ;;
 	esac
 done
@@ -412,6 +413,7 @@ validate_active_grub_chain() {
 		*) die "BootCurrent $active_efi_id uses '$active_efi_loader_path', not a recognised GRUB/shim loader" ;;
 	esac
 	esp=$(active_esp_mount)
+	active_esp_path=$esp
 	loader="$esp/${active_efi_loader_fs#/}"
 	require_privileged_path 'active EFI loader' "$loader" file
 	stub="$(dirname "$loader")/grub.cfg"
@@ -436,6 +438,7 @@ if not uuid or not prefix:
 print(f"{uuid}|{prefix}")
 ' <<<"$stub_content") || die "active EFI GRUB stub does not expose a verifiable filesystem UUID and GRUB prefix: $stub"
 	IFS='|' read -r uuid prefix <<<"$chain"
+	active_boot_chain_id="uefi:${active_efi_partuuid,,}:${active_efi_loader_compare}|grub:${uuid,,}:$prefix"
 	resolve_grub_filesystem "$uuid"
 	grub_generated_config="$active_grub_mount$prefix/grub.cfg"
 	require_privileged_path "active downstream GRUB configuration referenced by UUID=$uuid" "$grub_generated_config" file
@@ -536,15 +539,20 @@ machine_inventory() {
 	hardware_guard
 	detect_adapter
 	if [[ "$boot_manager" != grub ]]; then
-		python3 - "$running_os_pretty" "$(running_kernel)" "$token" <<'PY'
-import json, sys
+		local simple_inventory
+		simple_inventory=$(python3 - "$running_os_pretty" "$(running_kernel)" "$token" <<'PY'
+import hashlib, json, sys
 name, kernel, token = sys.argv[1:]
 patched = any(value in kernel for value in ("t14-len2068-touchpad-patch", "t14ps2quirk1"))
 active = token in open("/proc/cmdline", encoding="utf-8").read().split() if not __import__("os").environ.get("TOUCHPAD_PATCHER_TESTING") else False
 state = "kernel-patched + native-active" if patched and active else "kernel-patched" if patched else "native-active" if active else "unconfigured"
-json.dump({"bootloader_owner": "", "installations": [{"distribution": name, "kernel": kernel, "current": True, "boot_method": "active boot manager", "kernel_patched": patched, "native_configured": active, "remediation": state, "runtime": "current-live-evidence"}]}, sys.stdout, indent=2)
+identity = "linuxmint" if "mint" in name.lower() else "fedora" if "fedora" in name.lower() else name.lower()
+fingerprint = hashlib.sha256(json.dumps({"distribution_id": identity, "kernel": kernel, "kernel_patched": patched, "native_configured": active}, sort_keys=True).encode()).hexdigest()
+json.dump({"bootloader_owner": "", "boot_chain_id": "active-boot-manager", "installations": [{"distribution": name, "distribution_id": identity, "installation_id": identity, "root_uuid": "", "kernel": kernel, "current": True, "boot_method": "active boot manager", "kernel_patched": patched, "native_configured": active, "native_active": active, "boot_target_fingerprint": fingerprint, "runtime_verified": False, "remediation": state, "runtime": "current-live-evidence"}]}, sys.stdout, indent=2)
 print()
 PY
+		)
+		reconcile_verification_state "$simple_inventory"
 		return
 	fi
 	current_root_uuid=${current_root_uuid:-$(running_root_uuid)}
@@ -579,14 +587,41 @@ PY
 			*) die "BLS entry directory could not be inspected for machine inventory: $bls_dir" ;;
 		esac
 	done
-	python3 "$machine_inventory_helper" \
+	local raw_inventory
+	raw_inventory=$(python3 "$machine_inventory_helper" \
 		--token "$token" \
 		--current-root "$current_root_uuid" \
 		--current-kernel "$current_kernel" \
 		--current-os "$running_os_pretty" \
 		--current-cmdline "$(cmdline_value)" \
+		--chain-id "${active_boot_chain_id:-legacy-grub:$grub_generated_config}" \
 		--owner "${active_efi_label:-GRUB}" \
-		--bls-data "$bls_data" <<<"$content"
+		--bls-data "$bls_data" <<<"$content")
+	reconcile_verification_state "$raw_inventory"
+}
+
+verification_state_path() {
+	if [[ -n ${active_esp_path:-} ]]; then
+		printf '%s\n' "$active_esp_path/EFI/t14-len2068-touchpad-patch/runtime-verification.json"
+	else
+		printf '%s\n' "$(root_path /var/lib/t14-len2068-touchpad-patch/machine-runtime-verification.json)"
+	fi
+}
+
+reconcile_verification_state() {
+	local inventory=$1 shared_state
+	shared_state=$(verification_state_path)
+	sudo_run python3 "$verification_state_helper" reconcile "$shared_state" <<<"$inventory" || \
+		die "machine runtime-verification state could not be reconciled: $shared_state"
+}
+
+update_runtime_verification() {
+	local operation=$1 inventory shared_state
+	inventory=$(machine_inventory) || die 'current installation inventory could not be built for runtime verification state'
+	shared_state=$(verification_state_path)
+	sudo_run python3 "$verification_state_helper" "$operation" "$shared_state" <<<"$inventory" || \
+		die "machine runtime-verification state could not be updated: $shared_state"
+	log "machine runtime verification ${operation}d: $shared_state"
 }
 
 regenerate() {
@@ -963,6 +998,7 @@ verify_native() {
 		sudo_run sed -i 's/^status=.*/status=verified/' "$state_file"
 		log "native stock-kernel fix verified for $running_os_pretty: active entry '$current_grub_title', /proc/cmdline, SynPS/2, and TM3471 state all agree"
 		log "persistent configuration is externally managed by $active_efi_label GRUB; recognition is complete, but rollback must be performed from the bootloader-owning installation"
+		update_runtime_verification record
 		return 0
 	fi
 	if (( had_state )); then
@@ -972,6 +1008,7 @@ verify_native() {
 		state_write 0
 	fi
 	sudo_run sed -i 's/^status=.*/status=verified/' "$state_file"
+	update_runtime_verification record
 	log 'native stock-kernel fix verified: active boot entry confirmed, SynPS/2 active, and native TM3471 RMI4 absent'
 }
 
@@ -1058,6 +1095,8 @@ case "$action" in
 	status) native_status ;;
 	apply) apply_native ;;
 	verify) verify_native ;;
+	record-verification) update_runtime_verification record ;;
+	invalidate-verification) update_runtime_verification invalidate ;;
 	rollback-capability) rollback_capability ;;
 	rollback) rollback_native ;;
 	complete-rollback) complete_rollback ;;

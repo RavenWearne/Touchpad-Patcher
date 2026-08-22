@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.2.0
+
+- Persist successful runtime verification per Linux installation in shared
+  machine state on the active EFI system partition, allowing Fedora and Mint
+  to recognise each other's completed verification across boots.
+- Key and reconcile verification using root UUID, distribution identity,
+  kernel, remediation layers, active boot-chain identity, and a fingerprint of
+  the effective boot target; cached metadata never overrides live or generated
+  boot evidence.
+- Automatically invalidate verification when the kernel, root, boot entry,
+  bootloader chain, remediation method, or required argument changes.
+- Keep multiple kernels grouped under their installation and show a runtime
+  verification instruction only while that installation genuinely remains
+  unverified.
+- Remove duplicate native-only active messages and generic post-install/reboot
+  summaries while preserving the useful dual-layer status for patched Fedora
+  kernels that also receive the native parameter.
+- Add regression coverage for cross-OS Fedora/Mint verification persistence,
+  stale-state rejection, kernel/entry/root/remediation changes, installation
+  grouping, and concise completion output.
+
 ## 3.1.1
 
 - Treat Fedora BLS/grubby targets and foreign Mint os-prober targets as

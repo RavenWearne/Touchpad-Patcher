@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -36,6 +37,19 @@ def distribution(title: str) -> str:
     if "debian" in lowered:
         return "Debian"
     return title.split(",", 1)[0].strip() or "Linux"
+
+
+def distribution_identity(name: str) -> str:
+    lowered = name.lower()
+    if "linux mint" in lowered:
+        return "linuxmint"
+    if "fedora" in lowered:
+        return "fedora"
+    if "ubuntu" in lowered:
+        return "ubuntu"
+    if "debian" in lowered:
+        return "debian"
+    return re.sub(r"[^a-z0-9]+", "-", lowered).strip("-") or "linux"
 
 
 def collect(text: str, token: str) -> list[dict]:
@@ -125,6 +139,7 @@ def main() -> int:
     parser.add_argument("--owner", default="")
     parser.add_argument("--bls-data", default="")
     parser.add_argument("--current-cmdline", default="")
+    parser.add_argument("--chain-id", default="")
     args = parser.parse_args()
     targets = collect(sys.stdin.read(), args.token)
     targets.extend(collect_bls(args.bls_data, args.token))
@@ -136,6 +151,7 @@ def main() -> int:
         )
         if target["current"] and args.current_os:
             target["distribution"] = args.current_os
+        target["distribution_id"] = distribution_identity(target["distribution"])
         target["installation_id"] = target["root_uuid"].lower() or target["distribution"].lower()
         target["native_active"] = bool(target["current"] and active_token)
         target["boot_method"] = (f"{args.owner} BLS" if target.get("bls") else
@@ -149,7 +165,21 @@ def main() -> int:
         else:
             target["remediation"] = "unconfigured"
         target["runtime"] = "current-live-evidence" if target["current"] else "pending-runtime-verification"
-    json.dump({"bootloader_owner": args.owner, "installations": targets}, sys.stdout, indent=2)
+        fingerprint_data = {
+            "root_uuid": target["root_uuid"].lower(),
+            "distribution_id": target["distribution_id"],
+            "kernel": target["kernel"],
+            "arguments": target["arguments"],
+            "menu_ids": sorted(target["menu_ids"]),
+            "boot_method": target["boot_method"],
+            "chain_id": args.chain_id,
+            "kernel_patched": target["kernel_patched"],
+            "native_configured": target["native_configured"],
+        }
+        canonical = json.dumps(fingerprint_data, sort_keys=True, separators=(",", ":"))
+        target["boot_target_fingerprint"] = hashlib.sha256(canonical.encode()).hexdigest()
+        target["runtime_verified"] = False
+    json.dump({"bootloader_owner": args.owner, "boot_chain_id": args.chain_id, "installations": targets}, sys.stdout, indent=2)
     print()
     return 0
 
