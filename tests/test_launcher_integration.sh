@@ -17,7 +17,10 @@ make_case() {
 	cp -a -- "$source_dir/." "$repo_dir/"
 	printf '%s\n' 'ID=linuxmint' 'ID_LIKE="ubuntu debian"' 'PRETTY_NAME="Linux Mint 22.3"' >"$fixture_dir/etc/os-release"
 	printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"' >"$fixture_dir/etc/default/grub"
-	printf '%s\n' 'generated quiet splash' >"$fixture_dir/boot/grub/grub.cfg"
+	printf '%s\n' \
+		"menuentry 'Linux Mint test' {" \
+		'    linux /boot/vmlinuz-6.8.0-85-generic root=UUID=test ro quiet splash' \
+		'}' >"$fixture_dir/boot/grub/grub.cfg"
 	printf '%s\n' 'quiet splash' >"$fixture_dir/proc/cmdline"
 	printf '%s\n' 'N: Name="SynPS/2 Synaptics TouchPad"' >"$fixture_dir/proc/bus/input/devices"
 
@@ -27,8 +30,8 @@ set -euo pipefail
 [[ ${TOUCHPAD_TEST_UPDATE_GRUB_FAIL:-0} != 1 ]] || exit 42
 # shellcheck disable=SC1091
 . "$TOUCHPAD_PATCHER_TEST_ROOT/etc/default/grub"
-printf '    linux /boot/vmlinuz-test root=UUID=test ro %s $vt_handoff\n' "$GRUB_CMDLINE_LINUX_DEFAULT" \
-	>"$TOUCHPAD_PATCHER_TEST_ROOT/boot/grub/grub.cfg"
+printf "menuentry 'Linux Mint test' {\n    linux /boot/vmlinuz-6.8.0-85-generic root=UUID=test ro %s \$vt_handoff\n}\n" \
+	"$GRUB_CMDLINE_LINUX_DEFAULT" >"$TOUCHPAD_PATCHER_TEST_ROOT/boot/grub/grub.cfg"
 SH
 	chmod +x "$fake_bin/update-grub"
 
@@ -62,6 +65,35 @@ SH
 	chmod +x "$fake_bin/efibootmgr"
 }
 
+enable_foreign_grub() {
+	local current_label=$1 current_vendor=$2 chain_uuid=$3 root_uuid=$4 kernel=$5 title=$6
+	mkdir -p "$fixture_dir/sys/firmware/efi" "$fixture_dir/boot/efi/efi/$current_vendor" \
+		"$fixture_dir/filesystems/$chain_uuid/grub2"
+	touch "$fixture_dir/boot/efi/efi/$current_vendor/shimx64.efi"
+	printf '%s\n' \
+		"search --no-floppy --root-dev-only --fs-uuid --set=dev $chain_uuid" \
+		'set prefix=($dev)/grub2' \
+		'export $prefix' \
+		'configfile $prefix/grub.cfg' >"$fixture_dir/boot/efi/efi/$current_vendor/grub.cfg"
+	printf '%s\n' \
+		'BootCurrent: 0001' \
+		"Boot0001* $current_label HD(1,GPT,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,0x800,0x100000)/File(\\EFI\\$current_vendor\\shimx64.efi)" \
+		>"$fixture_dir/efibootmgr.out"
+	cat >"$fake_bin/efibootmgr" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+cat "$TOUCHPAD_PATCHER_TEST_ROOT/efibootmgr.out"
+SH
+	chmod +x "$fake_bin/efibootmgr"
+	printf '%s\n' \
+		'### BEGIN /etc/grub.d/30_os-prober ###' \
+		"menuentry '$title' {" \
+		"    linux /boot/vmlinuz-$kernel root=UUID=$root_uuid ro quiet splash" \
+		'}' \
+		'### END /etc/grub.d/30_os-prober ###' \
+		>"$fixture_dir/filesystems/$chain_uuid/grub2/grub.cfg"
+}
+
 run_launcher() {
 	local output_file=$1
 	shift
@@ -83,7 +115,7 @@ printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouc
 run_launcher "$case_dir/output"
 grep -Fq 'Native fix installed' "$case_dir/output"
 grep -Fq 'psmouse.synaptics_intertouch=0' "$fixture_dir/etc/default/grub"
-grep -Fq 'linux /boot/vmlinuz-test root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0 $vt_handoff' "$fixture_dir/boot/grub/grub.cfg"
+grep -Fq 'linux /boot/vmlinuz-6.8.0-85-generic root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0 $vt_handoff' "$fixture_dir/boot/grub/grub.cfg"
 [[ ! -e "$trace_file" ]] # Native success must not touch build dependencies/fallback.
 
 # The same Mint/GRUB installation rolls back through the manager path with spaces.
@@ -132,26 +164,69 @@ make_case active-ubuntu-chain
 printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
 enable_uefi 0003 Ubuntu ubuntu 0001 Fedora fedora
 run_launcher "$case_dir/install-output"
-grep -Fq 'active EFI GRUB chain verified: BootCurrent 0003' "$case_dir/install-output"
+grep -Fq 'active GRUB chain traced:' "$case_dir/install-output"
 grep -Fq 'Native fix installed' "$case_dir/install-output"
 printf '%s\n' 'quiet splash psmouse.synaptics_intertouch=0' >"$fixture_dir/proc/cmdline"
 run_launcher "$case_dir/reboot-output"
 grep -Fq 'Native fix kept' "$case_dir/reboot-output"
 
-# A generated Mint config is irrelevant when BootCurrent is Fedora's GRUB chain.
-make_case active-fedora-chain-mismatch
+# The physical Fedora-GRUB-booting-Mint chain is traced to its os-prober entry,
+# but generated foreign configuration is never edited as a persistent source.
+make_case fedora-grub-booting-mint
 printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
-printf '%s\n' '    linux /boot/vmlinuz-test root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0' >"$fixture_dir/boot/grub/grub.cfg"
-enable_uefi 0001 Fedora fedora 0003 Ubuntu ubuntu
+# Mint's inactive generated configuration has the token; Fedora's active entry does not.
+printf '%s\n' \
+	"menuentry 'Linux Mint inactive' {" \
+	'    linux /boot/vmlinuz-6.8.0-85-generic root=UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b ro quiet splash psmouse.synaptics_intertouch=0' \
+	'}' >"$fixture_dir/boot/grub/grub.cfg"
+enable_foreign_grub Fedora fedora 2b35be97-3acf-4fde-8fa4-9961c3202da2 \
+	501f6d9f-910b-4ff3-8820-ac4e2272bf8b 6.8.0-85-generic \
+	'Linux Mint 22.3 Cinnamon (on /dev/nvme0n1p4)'
+# A v2.0.3-style pending record is reconciled against the active Fedora entry.
+mkdir -p "$fixture_dir/var/lib/t14-len2068-touchpad-patch"
+printf '%s\n' \
+	'method=native' 'adapter=grub' 'boot_manager=grub' \
+	>"$fixture_dir/var/lib/t14-len2068-touchpad-patch/native-state"
+printf 'config_path=%q\nprior_conflict=0\nstatus=pending-verification\n' "$fixture_dir/etc/default/grub" \
+	>>"$fixture_dir/var/lib/t14-len2068-touchpad-patch/native-state"
 set +e
-run_launcher "$case_dir/output"
+foreign_status=$(env PATH="$fake_bin:$PATH" \
+	TOUCHPAD_PATCHER_TESTING=1 \
+	TOUCHPAD_PATCHER_TEST_ROOT="$fixture_dir" \
+	TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
+	TOUCHPAD_PATCHER_TEST_UNAME_R=6.8.0-85-generic \
+	TOUCHPAD_PATCHER_BOOT_MANAGER=grub \
+	"$repo_dir/scripts/t14-ps2-native-manager.sh" status 2>"$case_dir/foreign-status-error")
+status=$?
+set -e
+[[ $status -eq 20 && $foreign_status == not-managed ]]
+[[ ! -e "$fixture_dir/var/lib/t14-len2068-touchpad-patch/native-state" ]]
+set +e
+TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b run_launcher "$case_dir/output"
 status=$?
 set -e
 [[ $status -eq 1 ]]
-grep -Fq 'active EFI boot chain mismatch' "$case_dir/output"
-grep -Fq '\EFI\fedora\shimx64.efi' "$case_dir/output"
+grep -Fq 'Active EFI entry' "$case_dir/output" || grep -Fq 'active EFI entry' "$case_dir/output"
+grep -Fq 'current linuxmint installation is booted through Fedora GRUB via an os-prober-generated entry' "$case_dir/output"
+grep -Fq 'cannot be modified safely from the running installation' "$case_dir/output"
 [[ ! -e "$trace_file" ]]
 if grep -Fq 'psmouse.synaptics_intertouch=0' "$fixture_dir/etc/default/grub"; then exit 1; fi
+
+# The inverse arrangement is also traced: Fedora may run through Ubuntu GRUB.
+make_case ubuntu-grub-booting-fedora
+printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
+printf '%s\n' 'ID=fedora' 'ID_LIKE="rhel"' 'PRETTY_NAME="Fedora Linux"' >"$fixture_dir/etc/os-release"
+enable_foreign_grub Ubuntu ubuntu aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee \
+	fed0fed0-1111-2222-3333-444444444444 6.8.0-85-generic \
+	'Fedora Linux (on /dev/nvme0n1p2)'
+set +e
+TOUCHPAD_PATCHER_TEST_ROOT_UUID=fed0fed0-1111-2222-3333-444444444444 run_launcher "$case_dir/output"
+status=$?
+set -e
+[[ $status -eq 1 ]]
+grep -Fq 'current fedora installation is booted through Ubuntu GRUB via an os-prober-generated entry' "$case_dir/output"
+grep -Fq 'cannot be modified safely from the running installation' "$case_dir/output"
+[[ ! -e "$trace_file" ]]
 
 # Missing/ambiguous BootCurrent fails before any persistent modification.
 make_case ambiguous-efi-chain

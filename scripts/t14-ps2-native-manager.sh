@@ -1,17 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=2.0.3
+tool_version=2.0.4
 token=psmouse.synaptics_intertouch=0
 conflict=psmouse.synaptics_intertouch=1
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 editor="$project_dir/scripts/t14-ps2-kernel-arg.py"
+grub_entry_helper="$project_dir/scripts/t14-ps2-grub-entry.py"
 state_dir=/var/lib/t14-len2068-touchpad-patch
 state_file=$state_dir/native-state
 verbose=0
 assume_yes=0
 action=status
 status_query=0
+temporary_grub_mount=
+
+cleanup() {
+	[[ -n "$temporary_grub_mount" ]] || return 0
+	sudo_run umount -- "$temporary_grub_mount" >/dev/null 2>&1 || true
+	sudo_run rmdir -- "$temporary_grub_mount" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
 usage() {
 	cat <<EOF
@@ -115,18 +124,6 @@ read_active_efi_entry() {
 	detail "BootCurrent=$active_efi_id label='$active_efi_label' loader='$active_efi_loader_path' partuuid='$active_efi_partuuid' vendor='$active_efi_vendor'"
 }
 
-expected_efi_vendor() {
-	local distro_id=$1 distro_like=$2
-	case " $distro_id $distro_like " in
-		*linuxmint*|*ubuntu*) printf 'ubuntu\n' ;;
-		*debian*) printf 'debian\n' ;;
-		*fedora*) printf 'fedora\n' ;;
-		*rhel*|*centos*|*rocky*|*almalinux*) printf 'redhat\n' ;;
-		*opensuse*|*suse*) printf 'opensuse\n' ;;
-		*) return 1 ;;
-	esac
-}
-
 active_esp_mount() {
 	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then
 		printf '%s\n' "$(root_path /boot/efi)"
@@ -141,18 +138,81 @@ active_esp_mount() {
 	printf '%s\n' "$mount"
 }
 
+running_root_uuid() {
+	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then
+		printf '%s\n' "${TOUCHPAD_PATCHER_TEST_ROOT_UUID:-test}"
+		return
+	fi
+	local uuid
+	uuid=$(findmnt -rn -T / -o UUID | head -n1)
+	[[ -n "$uuid" ]] || die 'the current root filesystem UUID could not be determined'
+	printf '%s\n' "$uuid"
+}
+
+running_kernel() {
+	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then printf '%s\n' "${TOUCHPAD_PATCHER_TEST_UNAME_R:-$(uname -r)}"; else uname -r; fi
+}
+
+resolve_grub_filesystem() {
+	local uuid=$1 device mount_dir
+	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then
+		active_grub_mount=$(root_path "/filesystems/${uuid,,}")
+		if [[ -d "$active_grub_mount" ]]; then active_grub_is_local=0; else active_grub_mount=$(root_path /); active_grub_is_local=1; fi
+		return
+	fi
+	device="/dev/disk/by-uuid/${uuid,,}"
+	[[ -e "$device" ]] || die "the filesystem referenced by the active GRUB stub is unavailable: UUID=$uuid"
+	mount_dir=$(findmnt -rn -S "$(readlink -f -- "$device")" -o TARGET | head -n1)
+	if [[ -n "$mount_dir" ]]; then
+		active_grub_mount=$mount_dir
+	else
+		temporary_grub_mount="/run/t14-len2068-touchpad-patch/grub-${uuid,,}"
+		sudo_run mkdir -p -- "$temporary_grub_mount"
+		sudo_run mount -o ro -- "$device" "$temporary_grub_mount" || die "the filesystem referenced by the active GRUB stub could not be mounted read-only: UUID=$uuid"
+		active_grub_mount=$temporary_grub_mount
+	fi
+	local root_uuid boot_uuid
+	root_uuid=$(findmnt -rn -T / -o UUID | head -n1)
+	boot_uuid=$(findmnt -rn -T /boot -o UUID | head -n1)
+	if [[ "${uuid,,}" == "${root_uuid,,}" || "${uuid,,}" == "${boot_uuid,,}" ]]; then active_grub_is_local=1; else active_grub_is_local=0; fi
+}
+
+read_current_grub_entry() {
+	local content result status key value
+	if ! content=$(sudo_run cat -- "$grub_generated_config" 2>/dev/null); then
+		die "the active downstream GRUB configuration could not be read with administrator privileges: $grub_generated_config"
+	fi
+	set +e
+	result=$(python3 "$grub_entry_helper" "$current_root_uuid" "$current_kernel" "$token" <<<"$content")
+	status=$?
+	set -e
+	case "$status" in
+		0) ;;
+		2) die "the active GRUB configuration has no unique entry for root UUID $current_root_uuid and kernel $current_kernel: $grub_generated_config" ;;
+		3) die "the active GRUB configuration has multiple entries for root UUID $current_root_uuid and kernel $current_kernel; the next-boot path is ambiguous" ;;
+		*) die 'the active GRUB entry could not be parsed safely' ;;
+	esac
+	current_grub_title=
+	current_grub_os_prober=0
+	current_grub_has_token=0
+	while IFS='=' read -r key value; do
+		case "$key" in
+			title) current_grub_title=$value ;;
+			os_prober) current_grub_os_prober=$value ;;
+			token) current_grub_has_token=$value ;;
+		esac
+	done <<<"$result"
+	[[ -n "$current_grub_title" ]] || die 'the active GRUB entry parser returned no menu title'
+}
+
 validate_active_grub_chain() {
-	local distro_id=$1 distro_like=$2 expected_vendor esp loader stub stub_content chain uuid prefix target_uuid
+	local distro_id=$1 distro_like=$2 esp loader stub stub_content chain uuid prefix
 	candidate_exists /sys/firmware/efi || { detail 'legacy BIOS GRUB boot detected'; return 0; }
 	read_active_efi_entry
 	case "$active_efi_loader_normalized" in
 		*shim*.efi|*grub*.efi) ;;
 		*) die "BootCurrent $active_efi_id uses '$active_efi_loader_path', not a recognised GRUB/shim loader" ;;
 	esac
-	expected_vendor=$(expected_efi_vendor "$distro_id" "$distro_like") || \
-		die "the expected EFI GRUB vendor directory for this distribution cannot be determined safely"
-	[[ "$active_efi_vendor" == "$expected_vendor" ]] || \
-		die "active EFI boot chain mismatch: BootCurrent $active_efi_id loads '$active_efi_loader_path' ($active_efi_label), but this system's GRUB configuration belongs to EFI/$expected_vendor"
 	esp=$(active_esp_mount)
 	loader="$esp/${active_efi_loader_normalized#/}"
 	[[ -e "$loader" ]] || die "active EFI loader is not present on the mounted BootCurrent partition: $loader"
@@ -170,25 +230,31 @@ for line in text.splitlines():
             uuid = matches[-1]
             break
 prefix = ""
-match = re.search(r"(?m)^\s*set\s+prefix\s*=\s*.*?(/boot/grub2?)(?:[\x27\x22\s]|$)", text)
+match = re.search(r"(?m)^\s*set\s+prefix\s*=\s*.*?(/(?:boot/)?grub2?)(?:[\x27\x22\s]|$)", text)
 if match:
     prefix = match.group(1)
 if not uuid or not prefix:
     raise SystemExit(1)
 print(f"{uuid}|{prefix}")
-' <<<"$stub_content") || die "active EFI GRUB stub does not expose a verifiable filesystem UUID and /boot/grub prefix: $stub"
+' <<<"$stub_content") || die "active EFI GRUB stub does not expose a verifiable filesystem UUID and GRUB prefix: $stub"
 	IFS='|' read -r uuid prefix <<<"$chain"
-	grub_generated_config=$(root_path "$prefix/grub.cfg")
-	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then
-		target_uuid=${TOUCHPAD_PATCHER_TEST_GRUB_UUID:-}
-	else
-		target_uuid=$(findmnt -rn -T "$grub_generated_config" -o UUID | head -n1)
-		[[ -n "$target_uuid" ]] || target_uuid=$(grub-probe --target=fs_uuid "$grub_generated_config" 2>/dev/null || true)
+	resolve_grub_filesystem "$uuid"
+	grub_generated_config="$active_grub_mount$prefix/grub.cfg"
+	[[ -e "$grub_generated_config" ]] || die "the active EFI GRUB stub points to a missing downstream configuration: UUID=$uuid $prefix/grub.cfg"
+	current_root_uuid=$(running_root_uuid)
+	current_kernel=$(running_kernel)
+	read_current_grub_entry
+	log "active EFI entry: $active_efi_label (BootCurrent $active_efi_id, EFI/$active_efi_vendor)"
+	log "active GRUB chain traced: UUID=$uuid$prefix/grub.cfg"
+	log "current installation entry: $current_grub_title (root UUID $current_root_uuid, kernel $current_kernel)"
+	if [[ "$current_grub_os_prober" == 1 || "$active_grub_is_local" != 1 ]]; then
+		grub_foreign_entry=1
+		if [[ "$current_grub_os_prober" == 1 ]]; then
+			log "current $distro_id installation is booted through $active_efi_label GRUB via an os-prober-generated entry"
+		else
+			log "current $distro_id installation is booted through a GRUB configuration owned by another filesystem"
+		fi
 	fi
-	[[ -n "$target_uuid" ]] || die "filesystem UUID for the generated GRUB configuration could not be determined: $grub_generated_config"
-	[[ "${uuid,,}" == "${target_uuid,,}" ]] || \
-		die "active EFI GRUB stub points to filesystem UUID $uuid, but $grub_generated_config is on $target_uuid"
-	log "active EFI GRUB chain verified: BootCurrent $active_efi_id → EFI/$active_efi_vendor → $grub_generated_config"
 }
 
 detect_boot_manager() {
@@ -224,21 +290,19 @@ detect_boot_manager() {
 
 detect_adapter() {
 	detect_boot_manager
-	local os_file distro_id='' distro_like=''
+	local os_file distro_id='' distro_like='' distro_pretty=''
 	os_file=$(root_path /etc/os-release)
 	if [[ -r "$os_file" ]]; then
 		# shellcheck disable=SC1090
 		. "$os_file"
 		distro_id=${ID:-}
 		distro_like=${ID_LIKE:-}
+		distro_pretty=${PRETTY_NAME:-$distro_id}
 	fi
+	[[ -z "$distro_pretty" ]] || log "$distro_pretty detected"
 	case "$boot_manager" in
 		grub)
-			if command -v grubby >/dev/null && [[ " $distro_id $distro_like " == *fedora* || " $distro_id $distro_like " == *rhel* ]]; then
-				adapter=grubby; config_path=; config_format=; config_variable=
-			else
-				adapter=grub; config_path=$(root_path /etc/default/grub); config_format=shell; config_variable=GRUB_CMDLINE_LINUX_DEFAULT
-			fi
+			adapter=grub; config_path=$(root_path /etc/default/grub); config_format=shell; config_variable=GRUB_CMDLINE_LINUX_DEFAULT
 			;;
 		systemd-boot)
 			if [[ "$distro_id" == cachyos && -e "$(root_path /etc/sdboot-manage.conf)" ]]; then
@@ -251,8 +315,19 @@ detect_adapter() {
 		refind) adapter=refind; config_path=$(root_path /boot/refind_linux.conf); config_format=refind; config_variable= ;;
 		*) die "unsupported active boot manager: $boot_manager" ;;
 	esac
-	[[ "$adapter" == grubby || -f "$config_path" ]] || die "authoritative $adapter configuration was not found: $config_path"
+	[[ "$adapter" != grub || -f "$config_path" ]] || die "authoritative $adapter configuration was not found: $config_path"
 	[[ "$adapter" != grub ]] || validate_active_grub_chain "$distro_id" "$distro_like"
+	if [[ ${grub_foreign_entry:-0} == 1 ]]; then
+		adapter=grub-foreign
+		config_path=$grub_generated_config
+		config_format=
+		config_variable=
+	elif [[ "$boot_manager" == grub ]] && command -v grubby >/dev/null && [[ " $distro_id $distro_like " == *fedora* || " $distro_id $distro_like " == *rhel* ]]; then
+		adapter=grubby
+		config_path=
+		config_format=
+		config_variable=
+	fi
 	log "active boot manager: $boot_manager ($adapter adapter)"
 }
 
@@ -303,6 +378,9 @@ load_state() {
 config_contains_token() {
 	if [[ "$adapter" == grubby ]]; then
 		grubby --info=ALL 2>/dev/null | grep -Fq "$token"
+	elif [[ "$adapter" == grub-foreign ]]; then
+		read_current_grub_entry
+		[[ "$current_grub_has_token" == 1 ]]
 	else
 		local -a command=(python3 "$editor" check "$config_format" "$config_path")
 		[[ -z "$config_variable" ]] || command+=("$config_variable")
@@ -354,8 +432,19 @@ grub_generated_token_status() {
 verify_generated_contains_token() {
 	case "$adapter" in
 		grubby) grubby --info=ALL 2>/dev/null | grep -Fq "$token" || die 'generated boot entries do not contain the native parameter' ;;
+		grub-foreign)
+			read_current_grub_entry
+			[[ "$current_grub_has_token" == 1 ]] || die "the active GRUB entry for '$current_grub_title' does not contain the exact argument '$token'"
+			log "active GRUB entry verified: $current_grub_title"
+			;;
 		grub)
 			local status
+			if [[ -n ${current_root_uuid:-} ]]; then
+				read_current_grub_entry
+				[[ "$current_grub_has_token" == 1 ]] || die "the active GRUB entry for '$current_grub_title' does not contain the exact argument '$token'"
+				log "active GRUB entry verified: $current_grub_title"
+				return 0
+			fi
 			if grub_generated_token_status; then status=0; else status=$?; fi
 			case "$status" in
 				0) log "generated GRUB kernel entries verified: $grub_verified_path" ;;
@@ -388,7 +477,19 @@ verify_generated_absent_token() {
 			if grep -Fq "$token" "$config_path"; then die 'generated boot entries still contain the native parameter after rollback'; fi
 			return 0
 			;;
+		grub-foreign)
+			read_current_grub_entry
+			[[ "$current_grub_has_token" != 1 ]] || die "the active GRUB entry for '$current_grub_title' still contains the native parameter"
+			log "active GRUB entry verified without the native parameter: $current_grub_title"
+			return 0
+			;;
 	esac
+	if [[ "$adapter" == grub && -n ${current_root_uuid:-} ]]; then
+		read_current_grub_entry
+		[[ "$current_grub_has_token" != 1 ]] || die "the active GRUB entry for '$current_grub_title' still contains the native parameter after rollback"
+		log "active GRUB entry verified without the native parameter: $current_grub_title"
+		return 0
+	fi
 	local status
 	if grub_generated_token_status; then status=0; else status=$?; fi
 	case "$status" in
@@ -404,6 +505,11 @@ apply_native() {
 	detect_adapter
 	kernel_supports_parameter || return 20
 	log 'stock kernel supports the native touchpad parameter'
+	if [[ "$adapter" == grub-foreign ]]; then
+		local source_note=''
+		[[ "$current_grub_os_prober" != 1 ]] || source_note=' and generated by os-prober'
+		die "the active entry '$current_grub_title' in $grub_generated_config is owned by $active_efi_label GRUB$source_note; its persistent source cannot be modified safely from the running installation. Boot this installation through its own GRUB entry, or configure '$token' in the bootloader-owning OS and regenerate that GRUB configuration"
+	fi
 	if config_contains_token; then
 		verify_generated_contains_token
 		state_write 0
@@ -440,13 +546,23 @@ verify_native() {
 	grep -Fqw "$token" <<<"$(cmdline_value)" || die 'the running kernel command line does not contain the native parameter'
 	grep -q 'SynPS/2 Synaptics TouchPad' "$(input_devices_path)" || die 'SynPS/2 touchpad is not registered'
 	if grep -q 'Synaptics TM3471' "$(input_devices_path)"; then die 'native TM3471 RMI4 input device is still registered'; fi
-	log 'native stock-kernel fix verified: SynPS/2 active and native TM3471 RMI4 absent'
-	if ! load_state; then
-		detect_adapter
-		config_contains_token || die 'native parameter is active but no manageable persistent configuration was found'
+	local had_state=0 state_adapter='' state_config_path=''
+	if load_state; then
+		had_state=1
+		state_adapter=$adapter
+		state_config_path=$config_path
+	fi
+	detect_adapter
+	config_contains_token || die 'native parameter is active but the exact current boot entry has no persistent native parameter'
+	[[ "$adapter" != grub-foreign ]] || die "the native parameter is active through '$current_grub_title', but its persistent source is owned by $active_efi_label GRUB and cannot be managed or rolled back safely from this installation"
+	if (( had_state )); then
+		[[ "$adapter" == "$state_adapter" && "$config_path" == "$state_config_path" ]] || \
+			die "active boot configuration changed since installation (was $state_adapter, now $adapter); refusing to claim managed verification"
+	else
 		state_write 0
 	fi
 	sudo_run sed -i 's/^status=.*/status=verified/' "$state_file"
+	log 'native stock-kernel fix verified: active boot entry confirmed, SynPS/2 active, and native TM3471 RMI4 absent'
 }
 
 rollback_native() {

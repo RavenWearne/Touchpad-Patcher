@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.0.4
+
+- Trace UEFI GRUB through `BootCurrent`, the active EFI loader/stub, its
+  filesystem UUID and prefix, and the downstream `grub.cfg` instead of assuming
+  that the EFI vendor owns the running distribution.
+- Identify the exact generated menu entry for the running root filesystem UUID
+  and kernel, including Mint booted through Fedora GRUB and the inverse
+  cross-distribution arrangement.
+- Recognise os-prober-generated entries as legitimate active boot paths while
+  refusing to edit generated foreign configuration or an inactive local
+  `/etc/default/grub`; report how to remediate it in the bootloader-owning OS.
+- Reconcile pending native state against the exact active entry, so a token in
+  another GRUB installation cannot preserve stale state or pass verification.
+- Add the physically reproduced Fedora-GRUB-to-Mint chain as a permanent test
+  fixture, plus entry ambiguity, wrong-root/token, inverse ownership, and
+  no-fallback safety coverage.
+
 ## 2.0.3
 
 - Reconcile saved native state with the authoritative persistent boot
