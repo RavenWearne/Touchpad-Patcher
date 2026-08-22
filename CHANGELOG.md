@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.0.1
 
 - Fix native-manager execution when the repository path contains spaces,
   including the documented `Touchpad Patcher` clone directory.
