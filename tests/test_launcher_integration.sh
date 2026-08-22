@@ -309,6 +309,38 @@ grep -Fq 'cat --' "$privileged_trace"
 [[ ! -e "$trace_file" ]]
 if grep -Fq 'psmouse.synaptics_intertouch=0' "$fixture_dir/etc/default/grub"; then exit 1; fi
 
+# Mint adopts a fix that is genuinely active through Fedora's authoritative
+# os-prober entry. Verification succeeds, but local rollback remains blocked.
+foreign_generated="$fixture_dir/devices/2b35be97-3acf-4fde-8fa4-9961c3202da2/grub2/grub.cfg"
+chmod u+rw "$foreign_generated"
+sed -i '/ro quiet splash$/s/$/ psmouse.synaptics_intertouch=0/' "$foreign_generated"
+chmod 000 "$foreign_generated"
+printf '%s\n' 'quiet splash psmouse.synaptics_intertouch=0' >"$fixture_dir/proc/cmdline"
+TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
+	TOUCHPAD_PATCHER_TEST_UNAME_R=6.14.0-37-generic \
+	TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT=1 \
+	TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-chain-run" \
+	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
+	run_launcher "$case_dir/foreign-adoption-output"
+grep -Fq 'Native fix recognised and runtime verified' "$case_dir/foreign-adoption-output"
+grep -Fq 'rollback is available only from that owning installation' "$case_dir/foreign-adoption-output"
+grep -Fq 'ownership=external' "$fixture_dir/var/lib/t14-len2068-touchpad-patch/native-state"
+grep -Fq 'status=verified' "$fixture_dir/var/lib/t14-len2068-touchpad-patch/native-state"
+set +e
+rollback_output=$(env PATH="$fake_bin:$PATH" \
+	TOUCHPAD_PATCHER_TESTING=1 \
+	TOUCHPAD_PATCHER_TEST_ROOT="$fixture_dir" \
+	TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-chain-run" \
+	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
+	TOUCHPAD_PATCHER_BOOT_MANAGER=grub \
+	"$repo_dir/scripts/t14-ps2-native-manager.sh" rollback 2>&1)
+status=$?
+set -e
+[[ $status -eq 1 ]]
+grep -Fq 'rollback must be run from the authoritative bootloader owner' <<<"$rollback_output"
+TOUCHPAD_PATCHER_TEST_ROOT="$fixture_dir" TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
+	"$fake_bin/privileged-chain-run" cat -- "$foreign_generated" | grep -Fq 'psmouse.synaptics_intertouch=0'
+
 # An already-mounted active GRUB filesystem is reused without a temporary mount.
 : >"$privileged_trace"
 set +e

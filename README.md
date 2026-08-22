@@ -14,7 +14,7 @@ launcher verifies, retains, and rolls back either method.
 ```bash
 git clone --no-checkout https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
 cd "Touchpad Patcher"
-git switch --create stable-v3.0.0 v3.0.0
+git switch --create stable-v3.0.1 v3.0.1
 ./Run\ Touchpad\ Patcher.sh
 ```
 
@@ -91,6 +91,12 @@ not misreported as changing foreign os-prober entries. Those targets remain
 separate remediation work, with runtime verification pending until each OS is
 booted. Ambiguous chains and entries stop safely and never trigger an automatic
 kernel build.
+
+When a foreign authoritative GRUB entry already contains the parameter, the
+booted installation can adopt and verify that result using its exact generated
+entry, `/proc/cmdline`, and touchpad devices. The patcher records it as
+externally managed: recognition succeeds on Mint, while modification and
+rollback remain restricted to the Fedora/bootloader-owning installation.
 
 ## Native rollback
 

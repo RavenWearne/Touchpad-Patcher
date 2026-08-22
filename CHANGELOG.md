@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.0.1
+
+- Recognise and runtime-verify a native fix when the running installation is
+  booted by another distribution's authoritative GRUB configuration.
+- Treat ownership and verification as separate facts: Mint can record verified
+  live evidence while Fedora remains the only installation allowed to modify
+  or roll back its persistent os-prober entry.
+- Store externally managed state explicitly and suppress the local rollback
+  prompt instead of failing an otherwise successful verification.
+- Continue requiring agreement between the exact active entry, `/proc/cmdline`,
+  SynPS/2 registration, and absence of the native TM3471 RMI4 device.
+
 ## 3.0.0
 
 - Add a machine inventory covering the authoritative GRUB environment,

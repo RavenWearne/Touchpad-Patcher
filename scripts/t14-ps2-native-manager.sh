@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=3.0.0
+tool_version=3.0.1
 token=psmouse.synaptics_intertouch=0
 conflict=psmouse.synaptics_intertouch=1
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -48,7 +48,7 @@ trap 'exit 143' TERM
 
 usage() {
 	cat <<EOF
-Usage: $0 [--verbose] [--yes] [inventory|preflight|status|apply|verify|rollback|complete-rollback]
+Usage: $0 [--verbose] [--yes] [inventory|preflight|status|apply|verify|rollback-capability|rollback|complete-rollback]
 
 Prefer the stock distribution kernel by managing psmouse.synaptics_intertouch=0
 through the active boot manager. No kernel is compiled by this tool.
@@ -60,7 +60,7 @@ while [[ $# -gt 0 ]]; do
 		--verbose) verbose=1; shift ;;
 		--yes) assume_yes=1; shift ;;
 		-h|--help) usage; exit 0 ;;
-		inventory|preflight|status|apply|verify|rollback|complete-rollback) action=$1; shift ;;
+		inventory|preflight|status|apply|verify|rollback-capability|rollback|complete-rollback) action=$1; shift ;;
 		*) usage >&2; printf 'Unknown argument: %s\n' "$1" >&2; exit 2 ;;
 	esac
 done
@@ -602,12 +602,12 @@ regenerate() {
 }
 
 state_write() {
-	local prior_conflict=$1
+	local prior_conflict=$1 ownership=${2:-local}
 	state_dir=$(root_path /var/lib/t14-len2068-touchpad-patch)
 	state_file=$state_dir/native-state
 	sudo_run mkdir -p "$state_dir"
-	printf 'method=native\nadapter=%q\nboot_manager=%q\nconfig_path=%q\nprior_conflict=%q\nstatus=pending-verification\n' \
-		"$adapter" "$boot_manager" "$config_path" "$prior_conflict" | sudo_run tee "$state_file" >/dev/null
+	printf 'method=native\nadapter=%q\nboot_manager=%q\nconfig_path=%q\nprior_conflict=%q\nownership=%q\nstatus=pending-verification\n' \
+		"$adapter" "$boot_manager" "$config_path" "$prior_conflict" "$ownership" | sudo_run tee "$state_file" >/dev/null
 }
 
 load_state() {
@@ -825,7 +825,13 @@ verify_native() {
 	fi
 	detect_adapter
 	config_contains_token || die 'native parameter is active but the exact current boot entry has no persistent native parameter'
-	[[ "$adapter" != grub-foreign ]] || die "the native parameter is active through '$current_grub_title', but its persistent source is owned by $active_efi_label GRUB and cannot be managed or rolled back safely from this installation"
+	if [[ "$adapter" == grub-foreign ]]; then
+		state_write 0 external
+		sudo_run sed -i 's/^status=.*/status=verified/' "$state_file"
+		log "native stock-kernel fix verified for $running_os_pretty: active entry '$current_grub_title', /proc/cmdline, SynPS/2, and TM3471 state all agree"
+		log "persistent configuration is externally managed by $active_efi_label GRUB; recognition is complete, but rollback must be performed from the bootloader-owning installation"
+		return 0
+	fi
 	if (( had_state )); then
 		[[ "$adapter" == "$state_adapter" && "$config_path" == "$state_config_path" ]] || \
 			die "active boot configuration changed since installation (was $state_adapter, now $adapter); refusing to claim managed verification"
@@ -839,6 +845,7 @@ verify_native() {
 rollback_native() {
 	hardware_guard
 	load_state || die 'no native Touchpad Patcher state was found'
+	[[ ${ownership:-local} != external ]] || die 'this verified native configuration is owned by another installation; rollback must be run from the authoritative bootloader owner'
 	local state_adapter=$adapter state_config_path=$config_path
 	detect_adapter
 	[[ "$adapter" == "$state_adapter" && "$config_path" == "$state_config_path" ]] || \
@@ -859,6 +866,14 @@ rollback_native() {
 	verify_generated_absent_token
 	sudo_run sed -i 's/^status=.*/status=rollback-pending-reboot/' "$state_file"
 	log 'native parameter removed from boot configuration; reboot required to complete rollback'
+}
+
+rollback_capability() {
+	if load_state && [[ ${ownership:-local} == external ]]; then
+		printf 'external\n'
+		return 20
+	fi
+	printf 'local\n'
 }
 
 native_status() {
@@ -898,6 +913,7 @@ case "$action" in
 	status) native_status ;;
 	apply) apply_native ;;
 	verify) verify_native ;;
+	rollback-capability) rollback_capability ;;
 	rollback) rollback_native ;;
 	complete-rollback) complete_rollback ;;
 esac

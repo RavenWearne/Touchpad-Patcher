@@ -88,7 +88,7 @@ ask_choice() {
 }
 
 [[ -x "$installer" && -x "$native_manager" ]] || { printf 'Required patcher components are missing or not executable.\n' >&2; exit 1; }
-printf '%s\n' 'ThinkPad T14 Gen 1 LEN2068 Touchpad Patcher v3.0.0'
+printf '%s\n' 'ThinkPad T14 Gen 1 LEN2068 Touchpad Patcher v3.0.1'
 printf '%s\n\n' 'The stock-kernel boot parameter is preferred; a custom kernel is the guarded fallback.'
 if (( ! testing )); then
 	printf '%s\n' 'Administrator authentication is required to manage boot configuration or kernels.'
@@ -187,12 +187,22 @@ detail "native status=$native_status state='$native_state'"
 if (( native_status == 0 )); then
 	printf '\nNative stock-kernel method detected. Verifying...\n'
 	if "$native_manager" "${native_args[@]}" verify; then
-		choice=$(ask_choice 'Press Enter to keep the native fix, or R to roll it back: ' keep)
-		if [[ "${choice,,}" == r* ]]; then
-			"$native_manager" "${native_args[@]}" rollback
-			printf '\nReboot once more to complete rollback, then run the patcher to confirm it.\n'
+		set +e
+		rollback_scope=$("$native_manager" "${native_args[@]}" rollback-capability 2>>"$log_file")
+		rollback_status=$?
+		set -e
+		if (( rollback_status == 20 )) && [[ "$rollback_scope" == external ]]; then
+			printf '\nNative fix recognised and runtime verified.\n'
+			printf 'Its persistent configuration is owned by the authoritative foreign bootloader; rollback is available only from that owning installation.\n'
 		else
-			printf '\nNative fix kept. Future stock-kernel updates will inherit it.\n'
+			(( rollback_status == 0 )) || { printf 'Unable to determine native rollback ownership.\n' >&2; exit 1; }
+			choice=$(ask_choice 'Press Enter to keep the native fix, or R to roll it back: ' keep)
+			if [[ "${choice,,}" == r* ]]; then
+				"$native_manager" "${native_args[@]}" rollback
+				printf '\nReboot once more to complete rollback, then run the patcher to confirm it.\n'
+			else
+				printf '\nNative fix kept. Future stock-kernel updates will inherit it.\n'
+			fi
 		fi
 		finish 0
 	fi
