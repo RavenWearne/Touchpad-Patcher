@@ -9,6 +9,24 @@ kernel only when that native route is unavailable or proves ineffective.
 Stock distribution kernels are never removed by installation. The same
 launcher verifies, retains, and rolls back either method.
 
+## Current validation status
+
+Version 3.2.0 is physically validated end to end on the target hardware with:
+
+- **Fedora Linux 44** — Fedora BLS/grubby native patching, the separate custom
+  kernel fallback, SynPS/2 verification, and preservation of stock kernels.
+- **Linux Mint 22.3** with kernel `6.14.0-37-generic` — stock-kernel native
+  patching, reboot activation, and SynPS/2 verification.
+- **Fedora 44 + Linux Mint 22.3 multi-boot** — Fedora-owned EFI/GRUB, Mint
+  launched through Fedora's os-prober path, persistent cross-OS remediation,
+  generated-entry verification, and verification state shared across Fedora
+  and Mint boots.
+
+Debian/Ubuntu, RHEL-family, Arch/openSUSE GRUB, systemd-boot, CachyOS, Limine,
+and rEFInd adapters are implemented and regression-tested, but are not yet all
+physically confirmed. Unknown or ambiguous boot arrangements stop without
+changing configuration.
+
 ## Install the stable v3 release
 
 ```bash
@@ -20,12 +38,32 @@ git switch --create stable-v3.2.0 v3.2.0
 
 Normal runs show a concise, installation-grouped summary and automatically
 apply the native patch once the complete safety preflight succeeds. Use
-`--verbose` or `--debug` for the live EFI/GRUB/BLS trace. Every run retains a timestamped log
-under `logs/`. Repository, cache, log, and configuration paths containing
-spaces are supported; the documented `Touchpad Patcher` directory is covered
-by the integration tests.
+`--verbose` or `--debug` for the live EFI/GRUB/BLS trace. Every run retains a
+timestamped log under `logs/`. Repository, cache, log, and configuration paths
+containing spaces are supported; the documented `Touchpad Patcher` directory
+is covered by the integration tests.
 
-## How version 3 works
+The routine native patch is automatic only after the patcher proves the
+hardware, kernel support, authoritative boot path, persistent configuration
+source, affected scope, regeneration method, and generated result. A custom
+kernel build remains an explicit, confirmed fallback and never starts because
+an otherwise-supported native operation failed unexpectedly.
+
+## Normal user workflow
+
+Run the launcher once in each installed Linux system when asked. It reports:
+
+- the currently running OS and kernel;
+- whether a kernel-level or native touchpad patch is active;
+- whether live SynPS/2 behavior is verified;
+- installation-level status for other detected Linux systems; and
+- only the reboot or verification work that genuinely remains.
+
+If everything is patched and verified, no configuration is rewritten. On a
+multi-boot machine, successful runtime verification is remembered across boots
+so Fedora does not keep asking for Mint verification, or vice versa.
+
+## Detection and remediation model
 
 On every launch the patcher positively identifies a Lenovo ThinkPad T14 Gen 1
 and dynamically finds `LEN2068` in the readable serio firmware IDs. It then
@@ -60,14 +98,15 @@ The normal lifecycle is:
 8. Report configuration and runtime verification separately for each logical
    Linux installation.
 
-Successful runtime verification is recorded per installation in shared
-machine state on the active EFI system partition. This lets Fedora remember a
-verified Mint boot and Mint remember a verified Fedora boot. The record is
-metadata only: it is accepted only while the root UUID, distribution, kernel,
+Successful runtime verification is recorded per installation in shared machine
+state on the active EFI system partition. This lets Fedora remember a verified
+Mint boot and Mint remember a verified Fedora boot. The record is metadata
+only: it is accepted only while the root UUID, distribution, kernel,
 remediation method, active boot chain, and effective boot-target fingerprint
 still match. Live evidence for the running system and the authoritative
-generated entry for other systems always take priority; changed or removed
-remediation automatically returns that installation to pending or required.
+generated entry for other systems always take priority. A changed kernel,
+replaced installation, altered boot entry, changed bootloader chain, or removed
+parameter automatically returns that installation to pending or required.
 
 If the kernel lacks the parameter, the launcher offers the existing guarded
 custom-kernel build. If the parameter boots but does not produce the required
@@ -88,6 +127,10 @@ several choices.
 - CachyOS systemd-boot: `/etc/sdboot-manage.conf` and `sdboot-manage gen`
 - CachyOS Limine: `/etc/default/limine` and `limine-mkinitcpio`
 - rEFInd: `/boot/refind_linux.conf`
+
+The list above describes implemented adapters, not equal levels of physical
+validation. Fedora 44 and Linux Mint 22.3 are the confirmed reference systems;
+reports from other distributions remain welcome.
 
 The EFI vendor and running distribution may legitimately differ. For example,
 Mint can be started by an os-prober entry generated by Fedora's GRUB. The
@@ -118,10 +161,11 @@ rollback remain restricted to the Fedora/bootloader-owning installation.
 
 ## Native rollback
 
-Rollback remains available through the native manager's `rollback` action. It removes only the argument managed by this project, restores a
-previous explicit `psmouse.synaptics_intertouch=1` when applicable, regenerates
-the active boot configuration, and asks for one reboot. Run the launcher after
-that reboot to verify the parameter is inactive and clear the managed state.
+Rollback remains available through the native manager's `rollback` action. It
+removes only the argument managed by this project, restores a previous explicit
+`psmouse.synaptics_intertouch=1` when applicable, regenerates the active boot
+configuration, and asks for one reboot. Run the launcher after that reboot to
+verify the parameter is inactive and clear the managed state.
 
 A safety copy of the edited configuration is created beside it with the suffix
 `.touchpad-patcher-v2-backup`; ordinary rollback edits the current file rather
@@ -164,6 +208,12 @@ The patcher deliberately:
 - validates downloaded kernel source before building; and
 - refuses unknown Synaptics source layouts rather than patching heuristically.
 
+An OS is reported as **patched** only after its authoritative effective boot
+target contains the required remediation. It is reported as runtime-verified
+only after that OS has actually booted and live input evidence confirms SynPS/2
+with the native TM3471 RMI4 input absent. Cached state is never allowed to
+override either result.
+
 ## Advanced commands
 
 The native manager and machine inventory can be audited directly:
@@ -192,20 +242,7 @@ The source-only operation remains narrow and idempotent:
 
 ## Testing and reports
 
-The following paths have been physically validated end to end on a ThinkPad
-T14 Gen 1 with the LEN2068 / Synaptics TM3471-020 touchpad:
-
-- Fedora Linux 44: custom kernel remediation, native remediation for stock BLS
-  kernels, SynPS/2 runtime verification, and preservation of stock kernels.
-- Linux Mint 22.3 with kernel `6.14.0-37-generic`: native remediation and
-  SynPS/2 runtime verification.
-- Fedora 44 + Linux Mint 22.3 multi-boot: Fedora-owned EFI/GRUB, Mint launched
-  through Fedora's os-prober path, persistent Fedora-side cross-OS patching,
-  post-generation verification of Mint's effective entry, and per-OS runtime
-  verification remembered across subsequent Fedora and Mint boots.
-
-Other boot-manager adapters are structurally tested but still need broader
-physical testing across distributions. Submit sanitized results using the repository's
+Submit sanitized results from additional distributions using the repository's
 [distribution test report](https://github.com/RavenWearne/thinkpad-synaptics-patch/issues/new?template=distro-test.yml).
 
 Maintainers can run the regression suite with:
