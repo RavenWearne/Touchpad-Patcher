@@ -84,7 +84,7 @@ ask_choice() {
 }
 
 [[ -x "$installer" && -x "$native_manager" ]] || { printf 'Required patcher components are missing or not executable.\n' >&2; exit 1; }
-printf '%s\n' 'ThinkPad T14 Gen 1 LEN2068 Touchpad Patcher v2.0.5'
+printf '%s\n' 'ThinkPad T14 Gen 1 LEN2068 Touchpad Patcher v2.0.6'
 printf '%s\n\n' 'The stock-kernel boot parameter is preferred; a custom kernel is the guarded fallback.'
 if (( ! testing )); then
 	printf '%s\n' 'Administrator authentication is required to manage boot configuration or kernels.'

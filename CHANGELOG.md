@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.0.6
+
+- Perform ESP traversal, EFI loader/stub checks, GRUB filesystem discovery,
+  downstream configuration checks, and bootloader reads through the privileged
+  execution path established at launcher startup.
+- Use privileged checks and reads consistently for `/etc` boot settings,
+  generated boot entries, backups, `grubby`, and patcher state under `/var/lib`.
+- Distinguish a genuinely absent privileged path from a path that could not be
+  inspected with administrator privileges.
+- Add restrictive-ESP and root-only GRUB fixtures proving that an ordinary user
+  cannot traverse the chain while privileged tracing succeeds.
+- Exercise privileged read-only mount/unmount handling through the permanent
+  Fedora-GRUB-booting-Mint fixture and retain stale-state/no-fallback checks.
+
 ## 2.0.5
 
 - Preserve the exact case of the EFI loader path reported by `efibootmgr` when

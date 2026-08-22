@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=2.0.5
+tool_version=2.0.6
 token=psmouse.synaptics_intertouch=0
 conflict=psmouse.synaptics_intertouch=1
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -55,6 +55,36 @@ sudo_run() {
 	fi
 }
 
+privileged_path_status() {
+	local path=$1 kind=${2:-any}
+	sudo_run python3 -c '
+import os, stat, sys
+path, kind = sys.argv[1:]
+try:
+    mode = os.stat(path).st_mode
+except FileNotFoundError:
+    raise SystemExit(3)
+except OSError as error:
+    print(error, file=sys.stderr)
+    raise SystemExit(4)
+matches = kind == "any" or (kind == "file" and stat.S_ISREG(mode)) or (kind == "dir" and stat.S_ISDIR(mode))
+raise SystemExit(0 if matches else 3)
+' "$path" "$kind"
+}
+
+require_privileged_path() {
+	local description=$1 path=$2 kind=${3:-any} status
+	set +e
+	privileged_path_status "$path" "$kind"
+	status=$?
+	set -e
+	case "$status" in
+		0) return 0 ;;
+		3) die "$description is not present: $path" ;;
+		*) die "$description could not be inspected with administrator privileges: $path" ;;
+	esac
+}
+
 root_path() {
 	local path=$1
 	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then printf '%s%s' "${TOUCHPAD_PATCHER_TEST_ROOT:?}" "$path"; else printf '%s' "$path"; fi
@@ -92,7 +122,7 @@ kernel_supports_parameter() {
 	modinfo -p psmouse 2>/dev/null | grep -q '^synaptics_intertouch:'
 }
 
-candidate_exists() { [[ -e "$(root_path "$1")" ]]; }
+candidate_exists() { privileged_path_status "$(root_path "$1")" >/dev/null 2>&1; }
 
 read_active_efi_entry() {
 	[[ -n ${active_efi_loader_path:-} ]] && return 0
@@ -100,7 +130,7 @@ read_active_efi_entry() {
 	local output current line entry
 	local file_pattern='File\(([^)]*)\)'
 	local hd_pattern='HD\([^,]+,[Gg][Pp][Tt],([^,]+),'
-	output=$(efibootmgr -v 2>/dev/null) || die 'UEFI BootCurrent information could not be read with efibootmgr'
+	output=$(sudo_run efibootmgr -v 2>/dev/null) || die 'UEFI BootCurrent information could not be read with administrator privileges using efibootmgr'
 	current=$(sed -n 's/^BootCurrent:[[:space:]]*//p' <<<"$output" | head -n1)
 	[[ "$current" =~ ^[[:xdigit:]]{4}$ ]] || die 'UEFI BootCurrent is missing or invalid; the active boot chain is ambiguous'
 	line=$(awk -v wanted="${current^^}" '
@@ -131,9 +161,9 @@ active_esp_mount() {
 	fi
 	local part_link device mount
 	part_link="/dev/disk/by-partuuid/$active_efi_partuuid"
-	[[ -e "$part_link" ]] || die "active EFI partition $active_efi_partuuid is not available under /dev/disk/by-partuuid"
-	device=$(readlink -f -- "$part_link")
-	mount=$(findmnt -rn -S "$device" -o TARGET | head -n1)
+	require_privileged_path "active EFI partition $active_efi_partuuid" "$part_link"
+	device=$(sudo_run readlink -f -- "$part_link") || die "active EFI partition link could not be resolved with administrator privileges: $part_link"
+	mount=$(sudo_run findmnt -rn -S "$device" -o TARGET | head -n1)
 	[[ -n "$mount" ]] || die "active EFI partition $active_efi_partuuid is not mounted; its GRUB chain cannot be verified"
 	printf '%s\n' "$mount"
 }
@@ -144,7 +174,7 @@ running_root_uuid() {
 		return
 	fi
 	local uuid
-	uuid=$(findmnt -rn -T / -o UUID | head -n1)
+	uuid=$(sudo_run findmnt -rn -T / -o UUID | head -n1)
 	[[ -n "$uuid" ]] || die 'the current root filesystem UUID could not be determined'
 	printf '%s\n' "$uuid"
 }
@@ -156,13 +186,24 @@ running_kernel() {
 resolve_grub_filesystem() {
 	local uuid=$1 device mount_dir
 	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then
+		if [[ ${TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT:-0} == 1 ]]; then
+			device=$(root_path "/devices/$uuid")
+			require_privileged_path "test GRUB filesystem device (UUID=$uuid)" "$device" dir
+			temporary_grub_mount=$(root_path "/run/t14-len2068-touchpad-patch/grub-$uuid")
+			sudo_run mkdir -p -- "$temporary_grub_mount"
+			sudo_run mount -o ro -- "$device" "$temporary_grub_mount" || die "test GRUB filesystem could not be mounted read-only: UUID=$uuid"
+			active_grub_mount=$temporary_grub_mount
+			active_grub_is_local=0
+			return
+		fi
 		active_grub_mount=$(root_path "/filesystems/$uuid")
-		if [[ -d "$active_grub_mount" ]]; then active_grub_is_local=0; else active_grub_mount=$(root_path /); active_grub_is_local=1; fi
+		if privileged_path_status "$active_grub_mount" dir >/dev/null 2>&1; then active_grub_is_local=0; else active_grub_mount=$(root_path /); active_grub_is_local=1; fi
 		return
 	fi
 	device="/dev/disk/by-uuid/$uuid"
-	[[ -e "$device" ]] || die "the filesystem referenced by the active GRUB stub is unavailable: UUID=$uuid"
-	mount_dir=$(findmnt -rn -S "$(readlink -f -- "$device")" -o TARGET | head -n1)
+	require_privileged_path "filesystem referenced by the active GRUB stub (UUID=$uuid)" "$device"
+	device=$(sudo_run readlink -f -- "$device") || die "the active GRUB filesystem device could not be resolved with administrator privileges: UUID=$uuid"
+	mount_dir=$(sudo_run findmnt -rn -S "$device" -o TARGET | head -n1)
 	if [[ -n "$mount_dir" ]]; then
 		active_grub_mount=$mount_dir
 	else
@@ -172,8 +213,8 @@ resolve_grub_filesystem() {
 		active_grub_mount=$temporary_grub_mount
 	fi
 	local root_uuid boot_uuid
-	root_uuid=$(findmnt -rn -T / -o UUID | head -n1)
-	boot_uuid=$(findmnt -rn -T /boot -o UUID | head -n1)
+	root_uuid=$(sudo_run findmnt -rn -T / -o UUID | head -n1)
+	boot_uuid=$(sudo_run findmnt -rn -T /boot -o UUID | head -n1)
 	if [[ "${uuid,,}" == "${root_uuid,,}" || "${uuid,,}" == "${boot_uuid,,}" ]]; then active_grub_is_local=1; else active_grub_is_local=0; fi
 }
 
@@ -215,9 +256,9 @@ validate_active_grub_chain() {
 	esac
 	esp=$(active_esp_mount)
 	loader="$esp/${active_efi_loader_fs#/}"
-	[[ -e "$loader" ]] || die "active EFI loader is not present on the mounted BootCurrent partition: $loader"
+	require_privileged_path 'active EFI loader' "$loader" file
 	stub="$(dirname "$loader")/grub.cfg"
-	[[ -e "$stub" ]] || die "active EFI GRUB stub was not found beside the BootCurrent loader: $stub"
+	require_privileged_path 'active EFI GRUB stub' "$stub" file
 	if ! stub_content=$(sudo_run cat -- "$stub" 2>/dev/null); then die "active EFI GRUB stub could not be read with administrator privileges: $stub"; fi
 	chain=$(python3 -c '
 import re, sys
@@ -240,7 +281,7 @@ print(f"{uuid}|{prefix}")
 	IFS='|' read -r uuid prefix <<<"$chain"
 	resolve_grub_filesystem "$uuid"
 	grub_generated_config="$active_grub_mount$prefix/grub.cfg"
-	[[ -e "$grub_generated_config" ]] || die "the active EFI GRUB stub points to a missing downstream configuration: UUID=$uuid $prefix/grub.cfg"
+	require_privileged_path "active downstream GRUB configuration referenced by UUID=$uuid" "$grub_generated_config" file
 	current_root_uuid=$(running_root_uuid)
 	current_kernel=$(running_kernel)
 	read_current_grub_entry
@@ -315,7 +356,7 @@ detect_adapter() {
 		refind) adapter=refind; config_path=$(root_path /boot/refind_linux.conf); config_format=refind; config_variable= ;;
 		*) die "unsupported active boot manager: $boot_manager" ;;
 	esac
-	[[ "$adapter" != grub || -f "$config_path" ]] || die "authoritative $adapter configuration was not found: $config_path"
+	[[ "$adapter" != grub ]] || require_privileged_path "authoritative $adapter configuration" "$config_path" file
 	[[ "$adapter" != grub ]] || validate_active_grub_chain "$distro_id" "$distro_like"
 	if [[ ${grub_foreign_entry:-0} == 1 ]]; then
 		adapter=grub-foreign
@@ -368,28 +409,38 @@ state_write() {
 }
 
 load_state() {
+	local state_content state_status
 	state_file=$(root_path /var/lib/t14-len2068-touchpad-patch/native-state)
-	[[ -r "$state_file" ]] || return 1
+	set +e
+	privileged_path_status "$state_file" file >/dev/null 2>&1
+	state_status=$?
+	set -e
+	case "$state_status" in
+		0) ;;
+		3) return 1 ;;
+		*) die "patcher state could not be inspected with administrator privileges: $state_file" ;;
+	esac
+	state_content=$(sudo_run cat -- "$state_file") || die "patcher state could not be read with administrator privileges: $state_file"
 	# State is generated by this tool and restricted to simple values.
-	# shellcheck disable=SC1090
-	. "$state_file"
+	# shellcheck disable=SC1091
+	. /dev/stdin <<<"$state_content"
 }
 
 config_contains_token() {
 	if [[ "$adapter" == grubby ]]; then
-		grubby --info=ALL 2>/dev/null | grep -Fq "$token"
+		sudo_run grubby --info=ALL 2>/dev/null | grep -Fq "$token"
 	elif [[ "$adapter" == grub-foreign ]]; then
 		read_current_grub_entry
 		[[ "$current_grub_has_token" == 1 ]]
 	else
 		local -a command=(python3 "$editor" check "$config_format" "$config_path")
 		[[ -z "$config_variable" ]] || command+=("$config_variable")
-		"${command[@]}"
+		sudo_run "${command[@]}"
 	fi
 }
 
 grub_generated_token_status() {
-	local candidate content
+	local candidate content path_status
 	local found_config=0 unreadable=0
 	local -A checked=()
 	local -a candidates=()
@@ -406,7 +457,16 @@ grub_generated_token_status() {
 		[[ -n "$candidate" && -z ${checked[$candidate]:-} ]] || continue
 		checked[$candidate]=1
 		grub_checked_paths+="${grub_checked_paths:+, }$candidate"
-		[[ -e "$candidate" ]] || continue
+		set +e
+		privileged_path_status "$candidate" file >/dev/null 2>&1
+		path_status=$?
+		set -e
+		if (( path_status == 3 )); then continue; fi
+		if (( path_status != 0 )); then
+			unreadable=1
+			grub_unreadable_paths+="${grub_unreadable_paths:+, }$candidate (inspection failed)"
+			continue
+		fi
 		found_config=1
 		if ! content=$(sudo_run cat -- "$candidate" 2>/dev/null); then
 			unreadable=1
@@ -431,7 +491,7 @@ grub_generated_token_status() {
 
 verify_generated_contains_token() {
 	case "$adapter" in
-		grubby) grubby --info=ALL 2>/dev/null | grep -Fq "$token" || die 'generated boot entries do not contain the native parameter' ;;
+		grubby) sudo_run grubby --info=ALL 2>/dev/null | grep -Fq "$token" || die 'generated boot entries do not contain the native parameter' ;;
 		grub-foreign)
 			read_current_grub_entry
 			[[ "$current_grub_has_token" == 1 ]] || die "the active GRUB entry for '$current_grub_title' does not contain the exact argument '$token'"
@@ -453,28 +513,28 @@ verify_generated_contains_token() {
 				3) die "generated GRUB configuration was not found (checked: $grub_checked_paths)" ;;
 			esac
 			;;
-		cachyos-systemd-boot|systemd-boot) grep -RFq "$token" "$(root_path /boot/loader/entries)" 2>/dev/null || die 'generated boot entries do not contain the native parameter' ;;
-		limine) grep -Fq "$token" "$(root_path /boot/limine.conf)" 2>/dev/null || die 'generated boot entries do not contain the native parameter' ;;
-		refind) grep -Fq "$token" "$config_path" || die 'generated boot entries do not contain the native parameter' ;;
+		cachyos-systemd-boot|systemd-boot) sudo_run grep -RFq "$token" "$(root_path /boot/loader/entries)" 2>/dev/null || die 'generated boot entries do not contain the native parameter' ;;
+		limine) sudo_run grep -Fq "$token" "$(root_path /boot/limine.conf)" 2>/dev/null || die 'generated boot entries do not contain the native parameter' ;;
+		refind) sudo_run grep -Fq "$token" "$config_path" || die 'generated boot entries do not contain the native parameter' ;;
 	esac
 }
 
 verify_generated_absent_token() {
 	case "$adapter" in
 		grubby)
-			if grubby --info=ALL 2>/dev/null | grep -Fq "$token"; then die 'generated boot entries still contain the native parameter after rollback'; fi
+			if sudo_run grubby --info=ALL 2>/dev/null | grep -Fq "$token"; then die 'generated boot entries still contain the native parameter after rollback'; fi
 			return 0
 			;;
 		cachyos-systemd-boot|systemd-boot)
-			if grep -RFq "$token" "$(root_path /boot/loader/entries)" 2>/dev/null; then die 'generated boot entries still contain the native parameter after rollback'; fi
+			if sudo_run grep -RFq "$token" "$(root_path /boot/loader/entries)" 2>/dev/null; then die 'generated boot entries still contain the native parameter after rollback'; fi
 			return 0
 			;;
 		limine)
-			if grep -Fq "$token" "$(root_path /boot/limine.conf)" 2>/dev/null; then die 'generated boot entries still contain the native parameter after rollback'; fi
+			if sudo_run grep -Fq "$token" "$(root_path /boot/limine.conf)" 2>/dev/null; then die 'generated boot entries still contain the native parameter after rollback'; fi
 			return 0
 			;;
 		refind)
-			if grep -Fq "$token" "$config_path"; then die 'generated boot entries still contain the native parameter after rollback'; fi
+			if sudo_run grep -Fq "$token" "$config_path"; then die 'generated boot entries still contain the native parameter after rollback'; fi
 			return 0
 			;;
 		grub-foreign)
@@ -523,12 +583,21 @@ apply_native() {
 	fi
 	local prior_conflict=0
 	if [[ "$adapter" == grubby ]]; then
-		grubby --info=ALL 2>/dev/null | grep -Fq "$conflict" && prior_conflict=1
+		sudo_run grubby --info=ALL 2>/dev/null | grep -Fq "$conflict" && prior_conflict=1
 		sudo_run grubby --update-kernel=ALL --remove-args="$conflict" --args="$token"
 	else
-		grep -Fq "$conflict" "$config_path" && prior_conflict=1
+		sudo_run grep -Fq "$conflict" "$config_path" && prior_conflict=1
 		local backup="${config_path}.touchpad-patcher-v2-backup"
-		[[ -e "$backup" ]] || sudo_run cp -a -- "$config_path" "$backup"
+		local backup_status
+		set +e
+		privileged_path_status "$backup" >/dev/null 2>&1
+		backup_status=$?
+		set -e
+		case "$backup_status" in
+			0) ;;
+			3) sudo_run cp -a -- "$config_path" "$backup" ;;
+			*) die "boot configuration backup could not be inspected with administrator privileges: $backup" ;;
+		esac
 		local -a command=(python3 "$editor" add "$config_format" "$config_path")
 		[[ -z "$config_variable" ]] || command+=("$config_variable")
 		sudo_run "${command[@]}"

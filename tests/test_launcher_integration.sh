@@ -94,6 +94,38 @@ SH
 		>"$fixture_dir/filesystems/$chain_uuid/grub2/grub.cfg"
 }
 
+make_privileged_chain_runner() {
+	cat >"$fake_bin/privileged-chain-run" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+root=$TOUCHPAD_PATCHER_TEST_ROOT
+printf '%q ' "$@" >>"$TOUCHPAD_TEST_PRIVILEGED_TRACE"
+printf '\n' >>"$TOUCHPAD_TEST_PRIVILEGED_TRACE"
+chmod u+rwx "$root/boot/efi" 2>/dev/null || true
+find "$root/boot/efi" "$root/devices" "$root/run" -mindepth 1 -exec chmod u+rwX {} + 2>/dev/null || true
+case ${1:-} in
+	mount)
+		source=${@: -2:1}
+		target=${@: -1}
+		mkdir -p -- "$target"
+		cp -a -- "$source/." "$target/"
+		status=0
+		;;
+	umount) status=0 ;;
+	*)
+		set +e
+		"$@"
+		status=$?
+		set -e
+		;;
+esac
+find "$root/boot/efi" "$root/devices" -type f -exec chmod 000 {} + 2>/dev/null || true
+chmod 000 "$root/boot/efi" 2>/dev/null || true
+exit "$status"
+SH
+	chmod +x "$fake_bin/privileged-chain-run"
+}
+
 run_launcher() {
 	local output_file=$1
 	shift
@@ -184,6 +216,14 @@ enable_foreign_grub Fedora FeDoRa 2b35be97-3acf-4fde-8fa4-9961c3202da2 \
 	'Linux Mint 22.3 Cinnamon (on /dev/nvme0n1p4)'
 [[ -e "$fixture_dir/boot/efi/EFI/FeDoRa/shimx64.efi" ]]
 [[ ! -e "$fixture_dir/boot/efi/efi/fedora/shimx64.efi" ]]
+mkdir -p "$fixture_dir/devices" "$fixture_dir/run"
+mv "$fixture_dir/filesystems/2b35be97-3acf-4fde-8fa4-9961c3202da2" "$fixture_dir/devices/"
+privileged_trace="$case_dir/privileged trace"
+: >"$privileged_trace"
+make_privileged_chain_runner
+find "$fixture_dir/boot/efi" "$fixture_dir/devices" -type f -exec chmod 000 {} +
+chmod 000 "$fixture_dir/boot/efi"
+if test -e "$fixture_dir/boot/efi/EFI/FeDoRa/shimx64.efi"; then exit 1; fi
 # A v2.0.3-style pending record is reconciled against the active Fedora entry.
 mkdir -p "$fixture_dir/var/lib/t14-len2068-touchpad-patch"
 printf '%s\n' \
@@ -197,6 +237,9 @@ foreign_status=$(env PATH="$fake_bin:$PATH" \
 	TOUCHPAD_PATCHER_TEST_ROOT="$fixture_dir" \
 	TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
 	TOUCHPAD_PATCHER_TEST_UNAME_R=6.8.0-85-generic \
+	TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT=1 \
+	TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-chain-run" \
+	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
 	TOUCHPAD_PATCHER_BOOT_MANAGER=grub \
 	"$repo_dir/scripts/t14-ps2-native-manager.sh" status 2>"$case_dir/foreign-status-error")
 status=$?
@@ -204,15 +247,23 @@ set -e
 [[ $status -eq 20 && $foreign_status == not-managed ]]
 [[ ! -e "$fixture_dir/var/lib/t14-len2068-touchpad-patch/native-state" ]]
 set +e
-TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b run_launcher "$case_dir/output"
+TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
+	TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT=1 \
+	TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-chain-run" \
+	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
+	run_launcher "$case_dir/output"
 status=$?
 set -e
 [[ $status -eq 1 ]]
 grep -Fq 'Active EFI entry' "$case_dir/output" || grep -Fq 'active EFI entry' "$case_dir/output"
 grep -Fq 'current linuxmint installation is booted through Fedora GRUB via an os-prober-generated entry' "$case_dir/output"
 grep -Fq 'cannot be modified safely from the running installation' "$case_dir/output"
+grep -Fq 'mount -o ro --' "$privileged_trace"
+grep -Fq 'umount --' "$privileged_trace"
+grep -Fq 'cat --' "$privileged_trace"
 [[ ! -e "$trace_file" ]]
 if grep -Fq 'psmouse.synaptics_intertouch=0' "$fixture_dir/etc/default/grub"; then exit 1; fi
+chmod u+rwx "$fixture_dir/boot/efi"
 
 # The inverse arrangement is also traced: Fedora may run through Ubuntu GRUB.
 make_case ubuntu-grub-booting-fedora
@@ -228,6 +279,29 @@ set -e
 [[ $status -eq 1 ]]
 grep -Fq 'current fedora installation is booted through Ubuntu GRUB via an os-prober-generated entry' "$case_dir/output"
 grep -Fq 'cannot be modified safely from the running installation' "$case_dir/output"
+[[ ! -e "$trace_file" ]]
+
+# A failed privileged inspection is not misreported as a missing EFI loader.
+make_case privileged-efi-inspection-failure
+printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
+enable_uefi 0003 Ubuntu ubuntu 0001 Fedora fedora
+cat >"$fake_bin/failing-privileged-run" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${1:-} == python3 && ${*: -2:1} == *shimx64.efi ]]; then
+	printf '%s\n' 'simulated privileged inspection failure' >&2
+	exit 4
+fi
+"$@"
+SH
+chmod +x "$fake_bin/failing-privileged-run"
+set +e
+run_launcher "$case_dir/output" TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/failing-privileged-run"
+status=$?
+set -e
+[[ $status -eq 1 ]]
+grep -Fq 'active EFI loader could not be inspected with administrator privileges' "$case_dir/output"
+if grep -Fq 'active EFI loader is not present' "$case_dir/output"; then exit 1; fi
 [[ ! -e "$trace_file" ]]
 
 # Missing/ambiguous BootCurrent fails before any persistent modification.
