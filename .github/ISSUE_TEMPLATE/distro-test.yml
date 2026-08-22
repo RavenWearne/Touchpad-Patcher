@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for testing. Keep a stock distribution kernel installed as a fallback.
+        Thanks for testing v2.0.0. Report the native route where supported, or the custom-kernel fallback.
         Remove usernames, serial numbers, hostnames, and other private information from pasted logs.
 
   - type: input
@@ -59,8 +59,11 @@ body:
   - type: dropdown
     id: build_result
     attributes:
-      label: Build and installation result
+      label: Installation method and result
       options:
+        - Native boot parameter succeeded
+        - Native boot parameter failed verification
+        - Native route unsupported; custom kernel succeeded
         - Succeeded
         - Failed during dependency or safety checks
         - Failed during build
@@ -79,8 +82,9 @@ body:
   - type: dropdown
     id: boot_result
     attributes:
-      label: Patched-kernel boot result
+      label: Post-reboot result
       options:
+        - Native stock-kernel fix booted successfully
         - Booted successfully
         - Failed to boot; stock kernel fallback worked
         - Failed to boot; fallback problem encountered
@@ -92,7 +96,7 @@ body:
     id: verification
     attributes:
       label: SynPS/2 verification
-      description: After booting the patched kernel, run `./scripts/t14-ps2-kernel-installer.sh verify` and paste the result.
+      description: Run the main launcher after reboot and paste its native or custom-kernel verification result.
       render: shell
     validations:
       required: true

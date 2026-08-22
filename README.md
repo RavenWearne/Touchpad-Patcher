@@ -1,157 +1,154 @@
 # ThinkPad T14 Gen 1 LEN2068 Touchpad Patcher
 
-Build and install a distinctly named Linux kernel that keeps the Synaptics
-TM3471-020 / LEN2068 touchpad on its reliable SynPS/2 path instead of handing
-it to RMI4/SMBus. Stock distribution kernels and their boot entries are always
-preserved as fallbacks.
+Keep the Synaptics TM3471-020 / LEN2068 touchpad on its reliable SynPS/2 path.
+Version 2 prefers the stock distribution kernel by adding the supported Linux
+parameter `psmouse.synaptics_intertouch=0`. It builds a separate source-patched
+kernel only when that native route is unavailable or proves ineffective.
 
-The repository contains only the portable launcher, source patcher, and
-installer. Kernel sources and build products are downloaded or created locally
-and are never stored in Git.
+Stock distribution kernels are never removed by installation. The same
+launcher verifies, retains, and rolls back either method.
 
-## Clone the stable release and run
+## Install the stable v2 release
 
 ```bash
 git clone --no-checkout https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
 cd "Touchpad Patcher"
-git switch --create stable-v1.1.1 v1.1.1
+git switch --create stable-v2.0.0 v2.0.0
 ./Run\ Touchpad\ Patcher.sh
 ```
 
-This checks out the known `v1.1.1` release on a normal local branch rather than
-using the unreleased `main` branch or a detached HEAD. Published versions are
-available from [GitHub Releases](https://github.com/RavenWearne/thinkpad-synaptics-patch/releases).
+Use `--verbose` for live command output. Every run retains a timestamped log
+under `logs/`.
 
-For full live command and package-manager output, run:
+## How version 2 works
 
-```bash
-./Run\ Touchpad\ Patcher.sh --verbose
+On every launch the patcher positively identifies a Lenovo ThinkPad T14 Gen 1
+and dynamically finds `LEN2068` in the readable serio firmware IDs. It then
+inspects the running kernel, current kernel command line, input devices, active
+boot manager, existing patcher state, and installed custom kernels.
+
+The normal lifecycle is:
+
+1. Confirm that the stock kernel exposes the Synaptics `intertouch` parameter.
+2. Positively identify the active boot manager and its authoritative settings.
+3. Preserve all unrelated arguments and add only
+   `psmouse.synaptics_intertouch=0`.
+4. Regenerate and inspect the boot configuration.
+5. Reboot normally and run the same launcher again.
+6. Verify that the parameter reached `/proc/cmdline`, SynPS/2 is registered,
+   and the native TM3471 RMI4 input device is absent.
+7. Keep the verified fix by pressing Enter, or choose rollback in the same
+   launcher.
+
+If the kernel lacks the parameter, the launcher offers the existing guarded
+custom-kernel build. If the parameter boots but does not produce the required
+device state, the launcher offers to roll it back before starting that fallback.
+Unexpected boot-configuration errors stop safely and do not silently trigger a
+kernel build.
+
+## Boot-manager support
+
+The patcher detects what is active; it does not assume a boot manager from the
+distribution name. This matters on distributions such as CachyOS, which offers
+several choices.
+
+- Fedora/RHEL GRUB/BLS: `grubby`
+- Debian/Ubuntu/Mint GRUB: `/etc/default/grub` and `update-grub`
+- Arch/openSUSE GRUB: the detected GRUB configuration and generator
+- systemd-boot: `/etc/kernel/cmdline` and `kernel-install add-all`
+- CachyOS systemd-boot: `/etc/sdboot-manage.conf` and `sdboot-manage gen`
+- CachyOS Limine: `/etc/default/limine` and `limine-mkinitcpio`
+- rEFInd: `/boot/refind_linux.conf`
+
+If several installed boot managers make the active path ambiguous, the patcher
+stops instead of guessing. An unknown boot manager does not automatically cause
+a kernel rebuild because custom-kernel installation would face the same unsafe
+boot integration.
+
+## Native rollback
+
+After successful verification the launcher offers:
+
+```text
+Press Enter to keep the native fix, or R to roll it back
 ```
 
-Normal and verbose mode perform exactly the same operations. Normal mode shows
-concise installer statuses and elapsed time for long operations. Verbose mode
-also streams commands, package-manager output, downloads, compiler output, and
-bootloader operations. Every run keeps a complete timestamped diagnostic log
-in `logs/`; failed builds also identify the meaningful compiler error and keep
-a dedicated `*-kernel-build.log`.
+Rollback removes only the argument managed by this project, restores a
+previous explicit `psmouse.synaptics_intertouch=1` when applicable, regenerates
+the active boot configuration, and asks for one reboot. Run the launcher after
+that reboot to verify the parameter is inactive and clear the managed state.
 
-## What the launcher does
+A safety copy of the edited configuration is created beside it with the suffix
+`.touchpad-patcher-v2-backup`; ordinary rollback edits the current file rather
+than replacing it wholesale, so unrelated changes made later are preserved.
 
-The guarded workflow is:
+## Custom-kernel fallback
 
-1. Positively identify a Lenovo ThinkPad T14 Gen 1 and dynamically find
-   `LEN2068` in the readable serio firmware IDs.
-2. Detect the distribution adapter and running kernel configuration.
-3. Determine and install missing build, development-header, compression,
-   initramfs, and bootloader prerequisites before any source is downloaded.
-4. Resolve the matching upstream kernel source name. Distribution release
-   `X.Y.0-build-flavour` correctly maps to kernel.org's `linux-X.Y.tar.xz`.
-5. Benchmark a curated set of trusted HTTPS kernel.org mirrors for the exact
-   archive, use the fastest available source, and retain `cdn.kernel.org` as
-   the authoritative fallback.
-6. Validate cached/downloaded source against the SHA-256 published by
-   kernel.org, extract it atomically, apply the narrowly scoped Synaptics
-   policy change, and copy the running distribution kernel configuration.
-7. Build and install the distinctly suffixed kernel, modules, and initramfs.
-8. Update the supported bootloader, verify the patched entry, and safely select
-   it for the next boot where this can be verified without hard-coded menu
-   indexes. If selection cannot be proven safe, the patcher says so instead of
-   guessing.
-9. Confirm the patched kernel, module tree, initramfs, bootloader entry, and at
-   least one stock fallback kernel all exist.
+The fallback retains the v1 source policy change:
 
-Sudo authentication remains interactive. The launcher keeps the authenticated
-timestamp alive during the long build so it should not ask again near the end.
+1. Install adapter-specific build prerequisites.
+2. Resolve the matching stable upstream Linux source release.
+3. Benchmark trusted HTTPS kernel.org mirrors and verify the archive against
+   kernel.org's published SHA-256.
+4. Structurally locate `smbus_pnp_ids` and remove exactly one `LEN2068` entry.
+5. Copy the running distribution configuration and build a kernel suffixed
+   `-t14-len2068-touchpad-patch`.
+6. Install its modules and initramfs alongside every stock kernel.
+7. Update the supported boot manager and verify a stock fallback remains.
 
-## Dependency preparation
+After booting that kernel, run the launcher again. It verifies SynPS/2 and
+offers to keep the kernel or begin rollback. Because a running kernel cannot be
+safely removed, rollback records the request, asks the user to boot any stock
+kernel, and removes only the custom kernel on the following run.
 
-Dependencies are adapter-specific. On Debian, Ubuntu, and Linux Mint the
-installer refreshes APT metadata only when packages are missing, then installs
-the complete audited kernel build/install set before touching source. This
-includes the compiler toolchain, `bc`, `bison`, `flex`, GNU Awk (`gawk`), Perl, Python,
-`pkg-config`, OpenSSL, ELF/DWARF, zlib/zstd/lz4/lzo and ncurses development
-headers, `dwarves`/`pahole`, compression tools, `rsync`, `cpio`, `kmod`,
-initramfs tooling, GRUB tooling, and configuration-dependent GCC plug-in,
-Clang/LTO, or Rust requirements.
+Secure Boot is compatible with the preferred native route because the signed
+distribution kernel remains in use. The fallback refuses to install an
+unsigned custom kernel while Secure Boot is enabled.
 
-The specific Mint failures involving `libssl-dev`, `libelf-dev`, `dwarves`,
-`zlib1g-dev`, `libzstd-dev`, and `libdw-dev` (`dwarf.h`) are covered. After
-installation, the patcher verifies important commands and headers—including
-`dwarf.h`, libdw, libelf, OpenSSL, zlib, zstd, and `pahole` when BTF is enabled—
-and stops before download if any requirement is still unavailable.
+## Safety properties
 
-Installed packages are not reinstalled. Detailed APT/DNF/pacman/zypper output
-is written to the run log and is shown interactively only with `--verbose`.
+The patcher deliberately:
 
-## Boot and fallback behaviour
+- refuses non-Lenovo, non-T14-Gen-1, non-LEN2068 hardware;
+- requires positive kernel-parameter and active-boot-manager detection;
+- preserves unrelated boot arguments and avoids duplicate parameters;
+- makes native configuration changes idempotent and reversible;
+- refuses ambiguous or unknown boot integration;
+- never removes a running kernel;
+- preserves at least one stock distribution kernel;
+- validates downloaded kernel source before building; and
+- refuses unknown Synaptics source layouts rather than patching heuristically.
 
-On Debian, Ubuntu, and Linux Mint GRUB systems, the installer runs
-`update-grub`, confirms the generated configuration contains both the patched
-kernel and a stock fallback, resolves the generated GRUB entry IDs, and uses a
-verified one-time next-boot selection. It does not write numeric menu indexes,
-replace `/etc/default/grub`, or overwrite unrelated GRUB customisations.
+## Advanced commands
 
-Fedora uses `kernel-install` and `grubby` with verification. Other adapters
-update supported boot tooling conservatively and report when automatic
-selection is not safe. No path removes or silently replaces a distribution
-kernel.
-
-After reboot, run the launcher again. If already running the patched kernel it
-verifies that `SynPS/2 Synaptics TouchPad` is registered and that the native
-TM3471 RMI4 input device is absent.
-
-## Safety boundary
-
-The installer deliberately:
-
-- refuses non-Lenovo, non-T14-Gen-1, non-LEN2068, non-x86-64, unsupported
-  source-layout, and Secure-Boot-enabled installations;
-- inspects `smbus_pnp_ids`, modifies exactly the `LEN2068` policy entry,
-  recognizes already-patched trees, and fails rather than patching an unknown
-  driver layout;
-- copies the running kernel configuration, clears unavailable
-  distribution-private signing-key paths, and retains enabled build features
-  by preparing their host dependencies;
-- validates downloads before accepting them as cache and never promotes an
-  incomplete `.part` download;
-- gives custom kernels the descriptive
-  `-t14-len2068-touchpad-patch` suffix;
-- refuses to overwrite or uninstall the running kernel; and
-- requires an installed stock kernel to remain available after installation.
-
-Kernel updates do not inherit an out-of-tree source change. Re-run the release
-for the desired new upstream series, keep a stock kernel as fallback, and test
-the new build before removing any older custom build.
-
-## Advanced use
-
-The installer can be run directly:
+The native manager can be audited directly:
 
 ```bash
+./scripts/t14-ps2-native-manager.sh preflight
+./scripts/t14-ps2-native-manager.sh status
+./scripts/t14-ps2-native-manager.sh verify
+./scripts/t14-ps2-native-manager.sh rollback
+```
+
+The custom fallback remains independently usable:
+
+```bash
+./scripts/t14-ps2-kernel-installer.sh --dry-run preflight
 ./scripts/t14-ps2-kernel-installer.sh all
-./scripts/t14-ps2-kernel-installer.sh --verbose all
 ./scripts/t14-ps2-kernel-installer.sh verify
 ```
 
-Use `--kernel X.Y.Z` if the distribution release does not map to the desired
-upstream version, or `--source DIR` for a pre-downloaded clean kernel tree. The
-source-only policy operation is separately auditable and idempotent:
+The source-only operation remains narrow and idempotent:
 
 ```bash
 ./scripts/t14-ps2-patch-source.sh /path/to/linux
 ```
 
-The source patch supports stable upstream Linux 4.x and newer on x86-64 when
-the expected Synaptics table structure is present. Packaging, initramfs,
-Secure Boot, UKI, encrypted-boot, and bootloader arrangements vary between
-distributions, so uncommon custom boot setups may still require manual
-integration.
+## Testing and reports
 
-## Distribution testing
+Fedora's custom-kernel route has been validated end to end. Version 2's native
+boot-manager adapters are structurally tested but need broader physical testing
+across distributions. Submit sanitized results using the repository's
+[distribution test report](https://github.com/RavenWearne/thinkpad-synaptics-patch/issues/new?template=distro-test.yml).
 
-Fedora is validated end-to-end. Linux Mint 22.3 testing is in progress for
-v1.1.1; Debian/Ubuntu, Arch, openSUSE, and generic adapters need broader
-physical testing. Submit results with the repository's
-[distribution test report](https://github.com/RavenWearne/thinkpad-synaptics-patch/issues/new?template=distro-test.yml)
-so hardware detection, dependencies, build, boot, and SynPS/2 verification are
-comparable.
+See [CHANGELOG.md](CHANGELOG.md) for release changes.

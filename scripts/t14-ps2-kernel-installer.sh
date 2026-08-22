@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=5
+tool_version=6
 local_suffix=t14-len2068-touchpad-patch
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 patcher="$project_dir/scripts/t14-ps2-patch-source.sh"
@@ -20,8 +20,8 @@ usage() {
 	cat <<EOF
 Usage: $0 [options] [preflight|build|install|all|verify|uninstall]
 
-Build and install a distinctly named Linux kernel that keeps LEN2068 on the
-native SynPS/2 path instead of automatically handing it to RMI4/SMBus.
+Fallback builder: install a distinctly named Linux kernel that keeps LEN2068
+on SynPS/2 when the preferred stock-kernel parameter is unavailable.
 
 Options:
   --kernel VERSION   Upstream version to build (default: base of uname -r)
@@ -243,7 +243,7 @@ hardware_guard() {
 		status_ok "Synaptics LEN2068 detected at $matched_device"
 	fi
 	if (( ! assume_yes && ! dry_run )); then
-		printf 'Build the LEN2068 SynPS/2 policy kernel for this machine? [y/N] '
+		printf 'Build the custom LEN2068 SynPS/2 fallback kernel for this machine? [y/N] '
 		read -r answer
 		[[ "$answer" =~ ^[Yy]$ ]] || die 'Cancelled by user'
 	fi
@@ -788,10 +788,18 @@ refresh_bootloader() {
 			warn 'Bootloader updated, but automatic next-boot selection is not yet safely implemented for openSUSE'
 			;;
 		arch)
-			if command -v grub-mkconfig >/dev/null && [[ -d /boot/grub ]]; then
+			if command -v sdboot-manage >/dev/null && [[ -f /etc/sdboot-manage.conf ]]; then
+				run_logged sudo sdboot-manage gen || die 'CachyOS systemd-boot entry generation failed'
+			elif command -v limine-mkinitcpio >/dev/null && [[ -f /etc/default/limine ]]; then
+				run_logged sudo limine-mkinitcpio || die 'CachyOS Limine entry generation failed'
+			elif command -v grub-mkconfig >/dev/null && [[ -d /boot/grub ]]; then
 				run_logged sudo grub-mkconfig -o /boot/grub/grub.cfg || die 'GRUB update failed'
+			elif [[ -f /boot/refind_linux.conf ]]; then
+				warn 'rEFInd detected; verify that its automatic kernel scan exposes the custom kernel'
+			else
+				die 'No supported Arch/CachyOS boot-manager integration was detected for the custom kernel'
 			fi
-			warn 'Boot files installed; verify the preferred Arch boot entry manually'
+			warn 'Boot files installed; select and verify the custom Arch/CachyOS boot entry'
 			;;
 		generic)
 			run_logged sudo kernel-install add "$built_release" "/boot/vmlinuz-$built_release" || die 'kernel-install failed'
@@ -863,6 +871,7 @@ uninstall_kernel() {
 	[[ -n "$release" ]] || release=$(cat "$work_dir/.last-release" 2>/dev/null || true)
 	[[ "$release" == *"-$local_suffix" ]] || die 'Use --kernel with the complete custom release, or retain .last-release'
 	[[ "$(uname -r)" != "$release" ]] || die 'Boot a stock kernel before uninstalling the currently running kernel'
+	ensure_sudo
 	if command -v kernel-install >/dev/null; then run_logged sudo kernel-install remove "$release"; fi
 	if [[ "$adapter" == debian ]] && command -v update-initramfs >/dev/null; then run_logged sudo update-initramfs -d -k "$release" || true; fi
 	for path in "/boot/vmlinuz-$release" "/boot/initramfs-$release.img" "/boot/initrd.img-$release" "/boot/System.map-$release" "/boot/config-$release"; do

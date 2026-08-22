@@ -11,8 +11,15 @@
 !.github/ISSUE_TEMPLATE/distro-test.yml
 !LICENSE
 !README.md
+!CHANGELOG.md
 !Run Touchpad Patcher.sh
 !scripts/
 scripts/*
+!scripts/t14-ps2-kernel-arg.py
 !scripts/t14-ps2-kernel-installer.sh
+!scripts/t14-ps2-native-manager.sh
 !scripts/t14-ps2-patch-source.sh
+!tests/
+tests/*
+!tests/test_kernel_arg.py
+!tests/test_native_manager.sh
