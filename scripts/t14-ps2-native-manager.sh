@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=2.0.7
+tool_version=2.0.8
 token=psmouse.synaptics_intertouch=0
 conflict=psmouse.synaptics_intertouch=1
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -275,26 +275,80 @@ read_current_grub_entry() {
 		die "the active downstream GRUB configuration could not be read with administrator privileges: $grub_generated_config"
 	fi
 	set +e
-	result=$(python3 "$grub_entry_helper" "$current_root_uuid" "$current_kernel" "$token" <<<"$content")
+	result=$(python3 "$grub_entry_helper" "$current_root_uuid" "$current_kernel" "$token" "$(cmdline_value)" <<<"$content")
 	status=$?
 	set -e
 	case "$status" in
 		0) ;;
 		2) die "the active GRUB configuration has no unique entry for root UUID $current_root_uuid and kernel $current_kernel: $grub_generated_config" ;;
-		3) die "the active GRUB configuration has multiple entries for root UUID $current_root_uuid and kernel $current_kernel; the next-boot path is ambiguous" ;;
+		3) die "the active GRUB configuration has multiple materially different entries for root UUID $current_root_uuid and kernel $current_kernel; the current-system boot target is ambiguous" ;;
 		*) die 'the active GRUB entry could not be parsed safely' ;;
 	esac
 	current_grub_title=
+	current_grub_menu_id=
+	current_grub_equivalent_entries=1
 	current_grub_os_prober=0
 	current_grub_has_token=0
 	while IFS='=' read -r key value; do
 		case "$key" in
 			title) current_grub_title=$value ;;
+			menu_id) current_grub_menu_id=$value ;;
+			equivalent_entries) current_grub_equivalent_entries=$value ;;
 			os_prober) current_grub_os_prober=$value ;;
 			token) current_grub_has_token=$value ;;
 		esac
 	done <<<"$result"
 	[[ -n "$current_grub_title" ]] || die 'the active GRUB entry parser returned no menu title'
+	if (( current_grub_equivalent_entries > 1 )); then
+		log "collapsed $current_grub_equivalent_entries equivalent normal GRUB entries into one logical target${current_grub_menu_id:+ (menu ID $current_grub_menu_id)}"
+	fi
+}
+
+inspect_fedora_saved_entry() {
+	[[ "$active_efi_vendor" == fedora ]] || return 0
+	local grubenv content saved candidate status
+	local -a grubenv_candidates=(
+		"$(dirname "$grub_generated_config")/grubenv"
+		"$active_grub_mount/boot/grub2/grubenv"
+	)
+	local -A checked=()
+	for candidate in "${grubenv_candidates[@]}"; do
+		[[ -z ${checked[$candidate]:-} ]] || continue
+		checked[$candidate]=1
+		set +e
+		privileged_path_status "$candidate" file >/dev/null 2>&1
+		status=$?
+		set -e
+		case "$status" in
+			0) grubenv=$candidate; break ;;
+			3) ;;
+			*) die "Fedora GRUB environment could not be inspected with administrator privileges: $candidate" ;;
+		esac
+	done
+	[[ -n ${grubenv:-} ]] || return 0
+	content=$(sudo_run cat -- "$grubenv") || die "Fedora GRUB environment could not be read with administrator privileges: $grubenv"
+	saved=$(sed -n 's/^saved_entry=//p' <<<"$content" | head -n1)
+	[[ -n "$saved" ]] || return 0
+	log "Fedora GRUB saved/default entry: $saved (independent of the current Mint entry)"
+	local -a bls_candidates=(
+		"$active_grub_mount/boot/loader/entries/$saved.conf"
+		"$active_grub_mount/loader/entries/$saved.conf"
+	)
+	for candidate in "${bls_candidates[@]}"; do
+		set +e
+		privileged_path_status "$candidate" file >/dev/null 2>&1
+		status=$?
+		set -e
+		case "$status" in
+			0)
+				log "Fedora saved entry is backed by BLS: $candidate"
+				return 0
+				;;
+			3) ;;
+			*) die "Fedora BLS entry could not be inspected with administrator privileges: $candidate" ;;
+		esac
+	done
+	log 'Fedora saved entry is not a literal menuentry; leaving it intact because Fedora may resolve it through BLS/generated sources'
 }
 
 validate_active_grub_chain() {
@@ -336,6 +390,7 @@ print(f"{uuid}|{prefix}")
 	current_root_uuid=$(running_root_uuid)
 	current_kernel=$(running_kernel)
 	read_current_grub_entry
+	inspect_fedora_saved_entry
 	log "active EFI entry: $active_efi_label (BootCurrent $active_efi_id, EFI/$active_efi_vendor)"
 	log "active GRUB chain traced: UUID=$uuid$prefix/grub.cfg"
 	log "current installation entry: $current_grub_title (root UUID $current_root_uuid, kernel $current_kernel)"

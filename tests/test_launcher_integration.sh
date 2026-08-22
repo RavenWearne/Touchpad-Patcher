@@ -117,13 +117,18 @@ case ${1:-} in
 		target=${@: -1}
 		mkdir -p -- "$target"
 		ln -s -- "$source/grub2" "$target/grub2"
+		[[ ! -d "$source/boot" ]] || ln -s -- "$source/boot" "$target/boot"
 		status=0
 		if [[ ${TOUCHPAD_TEST_SIGNAL_AFTER_MOUNT:-0} == 1 ]]; then kill -TERM "$PPID"; fi
 		fi
 		;;
 	umount)
 		target=${!#}
-		if [[ -L "$target/grub2" ]]; then unlink "$target/grub2"; status=0; else status=32; fi
+		if [[ -L "$target/grub2" ]]; then
+			unlink "$target/grub2"
+			[[ ! -L "$target/boot" ]] || unlink "$target/boot"
+			status=0
+		else status=32; fi
 		;;
 	*)
 		set +e
@@ -147,7 +152,7 @@ run_launcher() {
 		TOUCHPAD_PATCHER_TESTING=1 \
 		TOUCHPAD_PATCHER_TEST_ROOT="$fixture_dir" \
 		TOUCHPAD_PATCHER_BOOT_MANAGER=grub \
-		TOUCHPAD_PATCHER_TEST_UNAME_R=6.8.0-85-generic \
+		TOUCHPAD_PATCHER_TEST_UNAME_R="${TOUCHPAD_PATCHER_TEST_UNAME_R:-6.8.0-85-generic}" \
 		TOUCHPAD_PATCHER_TEST_GRUB_UUID=11111111-2222-3333-4444-555555555555 \
 		TOUCHPAD_TEST_INSTALLER_TRACE="$trace_file" \
 		XDG_CACHE_HOME="$case_dir/cache with spaces" \
@@ -225,8 +230,28 @@ printf '%s\n' \
 	'    linux /boot/vmlinuz-6.8.0-85-generic root=UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b ro quiet splash psmouse.synaptics_intertouch=0' \
 	'}' >"$fixture_dir/boot/grub/grub.cfg"
 enable_foreign_grub Fedora FeDoRa 2b35be97-3acf-4fde-8fa4-9961c3202da2 \
-	501f6d9f-910b-4ff3-8820-ac4e2272bf8b 6.8.0-85-generic \
+	501f6d9f-910b-4ff3-8820-ac4e2272bf8b 6.14.0-37-generic \
 	'Linux Mint 22.3 Cinnamon (on /dev/nvme0n1p4)'
+foreign_root="$fixture_dir/filesystems/2b35be97-3acf-4fde-8fa4-9961c3202da2"
+saved_fedora_entry=4076fe3979de4e6f8953e741454d8241-7.1.8-t14ps2quirk1
+mkdir -p "$foreign_root/boot/loader/entries"
+printf 'saved_entry=%s\n' "$saved_fedora_entry" >"$foreign_root/grub2/grubenv"
+printf '%s\n' 'title Fedora patched kernel' "version $saved_fedora_entry" \
+	>"$foreign_root/boot/loader/entries/$saved_fedora_entry.conf"
+printf '%s\n' \
+	'### BEGIN /etc/grub.d/30_os-prober ###' \
+	"menuentry 'Linux Mint 22.3 Cinnamon (on /dev/nvme0n1p4)' --id 'osprober-mint-current' {" \
+	'    linux /boot/vmlinuz-6.14.0-37-generic root=UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b ro quiet splash' \
+	'}' \
+	"menuentry 'Linux Mint 22.3 Cinnamon, with Linux 6.14.0-37-generic (on /dev/nvme0n1p4)' --id 'osprober-mint-current' {" \
+	'    linux /boot/vmlinuz-6.14.0-37-generic root=UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b ro quiet splash' \
+	'}' \
+	"menuentry 'Linux Mint 22.3 Cinnamon, with Linux 6.14.0-37-generic (recovery mode) (on /dev/nvme0n1p4)' --id 'osprober-mint-recovery' {" \
+	'    linux /boot/vmlinuz-6.14.0-37-generic root=UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b ro recovery nomodeset' \
+	'}' \
+	'### END /etc/grub.d/30_os-prober ###' \
+	>"$foreign_root/grub2/grub.cfg"
+if grep -Fq "$saved_fedora_entry" "$foreign_root/grub2/grub.cfg"; then exit 1; fi
 [[ -e "$fixture_dir/boot/efi/EFI/FeDoRa/shimx64.efi" ]]
 [[ ! -e "$fixture_dir/boot/efi/efi/fedora/shimx64.efi" ]]
 mkdir -p "$fixture_dir/devices" "$fixture_dir/run"
@@ -249,7 +274,7 @@ foreign_status=$(env PATH="$fake_bin:$PATH" \
 	TOUCHPAD_PATCHER_TESTING=1 \
 	TOUCHPAD_PATCHER_TEST_ROOT="$fixture_dir" \
 	TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
-	TOUCHPAD_PATCHER_TEST_UNAME_R=6.8.0-85-generic \
+	TOUCHPAD_PATCHER_TEST_UNAME_R=6.14.0-37-generic \
 	TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT=1 \
 	TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-chain-run" \
 	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
@@ -262,6 +287,7 @@ set -e
 [[ ! -e "$fixture_dir/run/t14-len2068-touchpad-patch/grub-2b35be97-3acf-4fde-8fa4-9961c3202da2" ]]
 set +e
 TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
+	TOUCHPAD_PATCHER_TEST_UNAME_R=6.14.0-37-generic \
 	TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT=1 \
 	TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-chain-run" \
 	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
@@ -271,6 +297,9 @@ set -e
 [[ $status -eq 1 ]]
 grep -Fq 'Active EFI entry' "$case_dir/output" || grep -Fq 'active EFI entry' "$case_dir/output"
 grep -Fq 'current linuxmint installation is booted through Fedora GRUB via an os-prober-generated entry' "$case_dir/output"
+grep -Fq 'collapsed 2 equivalent normal GRUB entries into one logical target (menu ID osprober-mint-current)' "$case_dir/output"
+grep -Fq "Fedora GRUB saved/default entry: $saved_fedora_entry (independent of the current Mint entry)" "$case_dir/output"
+grep -Fq "Fedora saved entry is backed by BLS:" "$case_dir/output"
 grep -Fq 'cannot be modified safely from the running installation' "$case_dir/output"
 grep -Fq 'mount -o ro --' "$privileged_trace"
 grep -Fq 'findmnt -rn -S' "$privileged_trace"
@@ -287,7 +316,7 @@ mounted_output=$(env PATH="$fake_bin:$PATH" \
 	TOUCHPAD_PATCHER_TESTING=1 \
 	TOUCHPAD_PATCHER_TEST_ROOT="$fixture_dir" \
 	TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
-	TOUCHPAD_PATCHER_TEST_UNAME_R=6.8.0-85-generic \
+	TOUCHPAD_PATCHER_TEST_UNAME_R=6.14.0-37-generic \
 	TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT=1 \
 	TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-chain-run" \
 	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
@@ -305,6 +334,7 @@ if grep -Fq 'mount -o ro --' "$privileged_trace"; then exit 1; fi
 : >"$privileged_trace"
 set +e
 TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
+	TOUCHPAD_PATCHER_TEST_UNAME_R=6.14.0-37-generic \
 	TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT=1 \
 	TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-chain-run" \
 	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
@@ -321,6 +351,7 @@ grep -Fq 'could not be mounted read-only' "$case_dir/mount-failure-output"
 : >"$privileged_trace"
 set +e
 TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
+	TOUCHPAD_PATCHER_TEST_UNAME_R=6.14.0-37-generic \
 	TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT=1 \
 	TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-chain-run" \
 	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
@@ -340,7 +371,7 @@ env PATH="$fake_bin:$PATH" \
 	TOUCHPAD_PATCHER_TESTING=1 \
 	TOUCHPAD_PATCHER_TEST_ROOT="$fixture_dir" \
 	TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
-	TOUCHPAD_PATCHER_TEST_UNAME_R=6.8.0-85-generic \
+	TOUCHPAD_PATCHER_TEST_UNAME_R=6.14.0-37-generic \
 	TOUCHPAD_PATCHER_TEST_FORCE_TEMP_MOUNT=1 \
 	TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-chain-run" \
 	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \

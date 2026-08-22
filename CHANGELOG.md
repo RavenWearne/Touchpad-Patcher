@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.0.8
+
+- Collapse generic and version-specific GRUB menu entries into one logical
+  current-system target when root UUID, kernel, and effective kernel arguments
+  are equivalent, using shared menu IDs as supporting evidence.
+- Exclude recovery/rescue entries during a normal boot and select them only
+  when the running command line indicates recovery mode.
+- Preserve ambiguity failures for matching entries with materially different
+  kernel arguments.
+- Read Fedora `grubenv` saved/default state separately from current-system entry
+  identification and recognise saved entries backed by BLS files without
+  requiring a literal `menuentry` in `grub.cfg`.
+- Expand the physical Fedora-GRUB-booting-Mint fixture to include duplicate
+  normal entries, a recovery entry, and an independent Fedora BLS saved target.
+
 ## 2.0.7
 
 - Handle `findmnt` status 1 as the expected “valid active GRUB filesystem is
