@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=2.0.4
+tool_version=2.0.5
 token=psmouse.synaptics_intertouch=0
 conflict=psmouse.synaptics_intertouch=1
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -117,9 +117,9 @@ read_active_efi_entry() {
 	active_efi_label=${active_efi_label% }
 	if [[ "$line" =~ $file_pattern ]]; then active_efi_loader_path=${BASH_REMATCH[1]}; else die "UEFI BootCurrent $current does not expose an EFI loader path"; fi
 	if [[ "$line" =~ $hd_pattern ]]; then active_efi_partuuid=${BASH_REMATCH[1]}; else die "UEFI BootCurrent $current does not expose a GPT EFI partition UUID"; fi
-	active_efi_loader_normalized=${active_efi_loader_path//\\//}
-	active_efi_loader_normalized=${active_efi_loader_normalized,,}
-	if [[ "$active_efi_loader_normalized" =~ /efi/([^/]+)/ ]]; then active_efi_vendor=${BASH_REMATCH[1]}; else die "UEFI loader path is outside a recognisable EFI vendor directory: $active_efi_loader_path"; fi
+	active_efi_loader_fs=${active_efi_loader_path//\\//}
+	active_efi_loader_compare=${active_efi_loader_fs,,}
+	if [[ "$active_efi_loader_compare" =~ /efi/([^/]+)/ ]]; then active_efi_vendor=${BASH_REMATCH[1]}; else die "UEFI loader path is outside a recognisable EFI vendor directory: $active_efi_loader_path"; fi
 	active_efi_id=${current^^}
 	detail "BootCurrent=$active_efi_id label='$active_efi_label' loader='$active_efi_loader_path' partuuid='$active_efi_partuuid' vendor='$active_efi_vendor'"
 }
@@ -130,7 +130,7 @@ active_esp_mount() {
 		return
 	fi
 	local part_link device mount
-	part_link="/dev/disk/by-partuuid/${active_efi_partuuid,,}"
+	part_link="/dev/disk/by-partuuid/$active_efi_partuuid"
 	[[ -e "$part_link" ]] || die "active EFI partition $active_efi_partuuid is not available under /dev/disk/by-partuuid"
 	device=$(readlink -f -- "$part_link")
 	mount=$(findmnt -rn -S "$device" -o TARGET | head -n1)
@@ -156,11 +156,11 @@ running_kernel() {
 resolve_grub_filesystem() {
 	local uuid=$1 device mount_dir
 	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then
-		active_grub_mount=$(root_path "/filesystems/${uuid,,}")
+		active_grub_mount=$(root_path "/filesystems/$uuid")
 		if [[ -d "$active_grub_mount" ]]; then active_grub_is_local=0; else active_grub_mount=$(root_path /); active_grub_is_local=1; fi
 		return
 	fi
-	device="/dev/disk/by-uuid/${uuid,,}"
+	device="/dev/disk/by-uuid/$uuid"
 	[[ -e "$device" ]] || die "the filesystem referenced by the active GRUB stub is unavailable: UUID=$uuid"
 	mount_dir=$(findmnt -rn -S "$(readlink -f -- "$device")" -o TARGET | head -n1)
 	if [[ -n "$mount_dir" ]]; then
@@ -209,12 +209,12 @@ validate_active_grub_chain() {
 	local distro_id=$1 distro_like=$2 esp loader stub stub_content chain uuid prefix
 	candidate_exists /sys/firmware/efi || { detail 'legacy BIOS GRUB boot detected'; return 0; }
 	read_active_efi_entry
-	case "$active_efi_loader_normalized" in
+	case "$active_efi_loader_compare" in
 		*shim*.efi|*grub*.efi) ;;
 		*) die "BootCurrent $active_efi_id uses '$active_efi_loader_path', not a recognised GRUB/shim loader" ;;
 	esac
 	esp=$(active_esp_mount)
-	loader="$esp/${active_efi_loader_normalized#/}"
+	loader="$esp/${active_efi_loader_fs#/}"
 	[[ -e "$loader" ]] || die "active EFI loader is not present on the mounted BootCurrent partition: $loader"
 	stub="$(dirname "$loader")/grub.cfg"
 	[[ -e "$stub" ]] || die "active EFI GRUB stub was not found beside the BootCurrent loader: $stub"
@@ -268,7 +268,7 @@ detect_boot_manager() {
 		elif command -v efibootmgr >/dev/null && candidate_exists /sys/firmware/efi; then
 			read_active_efi_entry
 			current_label=$active_efi_label
-			case "${active_efi_loader_normalized} ${current_label,,}" in
+			case "${active_efi_loader_compare} ${current_label,,}" in
 				*limine*) boot_manager=limine ;;
 				*refind*) boot_manager=refind ;;
 				*grub*|*shim*|*fedora*|*ubuntu*|*debian*|*opensuse*) boot_manager=grub ;;

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0.5
+
+- Preserve the exact case of the EFI loader path reported by `efibootmgr` when
+  accessing the EFI system partition; use a separate lowercase value only for
+  boot-manager classification and vendor comparisons.
+- Fix physical tracing of `/EFI/fedora/shimx64.efi` and its neighboring
+  `grub.cfg` on case-sensitive EFI mount views.
+- Audit the UEFI/GRUB tracer so case-folded filesystem paths are never used for
+  real file access.
+- Extend the permanent Fedora-GRUB-booting-Mint fixture with uppercase and
+  mixed-case EFI path components while retaining the full UUID, os-prober,
+  root/kernel, stale-state, and no-fallback checks.
+
 ## 2.0.4
 
 - Trace UEFI GRUB through `BootCurrent`, the active EFI loader/stub, its

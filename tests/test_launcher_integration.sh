@@ -46,12 +46,12 @@ SH
 enable_uefi() {
 	local current=$1 current_label=$2 current_vendor=$3
 	local other_id=$4 other_label=$5 other_vendor=$6
-	mkdir -p "$fixture_dir/sys/firmware/efi" "$fixture_dir/boot/efi/efi/$current_vendor" "$fixture_dir/boot/efi/efi/$other_vendor"
-	touch "$fixture_dir/boot/efi/efi/$current_vendor/shimx64.efi" "$fixture_dir/boot/efi/efi/$other_vendor/shimx64.efi"
+	mkdir -p "$fixture_dir/sys/firmware/efi" "$fixture_dir/boot/efi/EFI/$current_vendor" "$fixture_dir/boot/efi/EFI/$other_vendor"
+	touch "$fixture_dir/boot/efi/EFI/$current_vendor/shimx64.efi" "$fixture_dir/boot/efi/EFI/$other_vendor/shimx64.efi"
 	printf '%s\n' \
 		'search.fs_uuid 11111111-2222-3333-4444-555555555555 root' \
 		"set prefix=(\$root)'/boot/grub'" \
-		'configfile $prefix/grub.cfg' >"$fixture_dir/boot/efi/efi/$current_vendor/grub.cfg"
+		'configfile $prefix/grub.cfg' >"$fixture_dir/boot/efi/EFI/$current_vendor/grub.cfg"
 	printf '%s\n' \
 		"BootCurrent: $current" \
 		"Boot${current}* $current_label HD(1,GPT,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,0x800,0x100000)/File(\\EFI\\$current_vendor\\shimx64.efi)" \
@@ -67,14 +67,14 @@ SH
 
 enable_foreign_grub() {
 	local current_label=$1 current_vendor=$2 chain_uuid=$3 root_uuid=$4 kernel=$5 title=$6
-	mkdir -p "$fixture_dir/sys/firmware/efi" "$fixture_dir/boot/efi/efi/$current_vendor" \
+	mkdir -p "$fixture_dir/sys/firmware/efi" "$fixture_dir/boot/efi/EFI/$current_vendor" \
 		"$fixture_dir/filesystems/$chain_uuid/grub2"
-	touch "$fixture_dir/boot/efi/efi/$current_vendor/shimx64.efi"
+	touch "$fixture_dir/boot/efi/EFI/$current_vendor/shimx64.efi"
 	printf '%s\n' \
 		"search --no-floppy --root-dev-only --fs-uuid --set=dev $chain_uuid" \
 		'set prefix=($dev)/grub2' \
 		'export $prefix' \
-		'configfile $prefix/grub.cfg' >"$fixture_dir/boot/efi/efi/$current_vendor/grub.cfg"
+		'configfile $prefix/grub.cfg' >"$fixture_dir/boot/efi/EFI/$current_vendor/grub.cfg"
 	printf '%s\n' \
 		'BootCurrent: 0001' \
 		"Boot0001* $current_label HD(1,GPT,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,0x800,0x100000)/File(\\EFI\\$current_vendor\\shimx64.efi)" \
@@ -179,9 +179,11 @@ printf '%s\n' \
 	"menuentry 'Linux Mint inactive' {" \
 	'    linux /boot/vmlinuz-6.8.0-85-generic root=UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b ro quiet splash psmouse.synaptics_intertouch=0' \
 	'}' >"$fixture_dir/boot/grub/grub.cfg"
-enable_foreign_grub Fedora fedora 2b35be97-3acf-4fde-8fa4-9961c3202da2 \
+enable_foreign_grub Fedora FeDoRa 2b35be97-3acf-4fde-8fa4-9961c3202da2 \
 	501f6d9f-910b-4ff3-8820-ac4e2272bf8b 6.8.0-85-generic \
 	'Linux Mint 22.3 Cinnamon (on /dev/nvme0n1p4)'
+[[ -e "$fixture_dir/boot/efi/EFI/FeDoRa/shimx64.efi" ]]
+[[ ! -e "$fixture_dir/boot/efi/efi/fedora/shimx64.efi" ]]
 # A v2.0.3-style pending record is reconciled against the active Fedora entry.
 mkdir -p "$fixture_dir/var/lib/t14-len2068-touchpad-patch"
 printf '%s\n' \
