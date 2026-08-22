@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=2.0.2
+tool_version=2.0.3
 token=psmouse.synaptics_intertouch=0
 conflict=psmouse.synaptics_intertouch=1
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -11,6 +11,7 @@ state_file=$state_dir/native-state
 verbose=0
 assume_yes=0
 action=status
+status_query=0
 
 usage() {
 	cat <<EOF
@@ -31,8 +32,8 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-log() { printf '[native] %s\n' "$*"; }
-detail() { (( ! verbose )) || printf '[native detail] %s\n' "$*"; }
+log() { if (( status_query )); then printf '[native] %s\n' "$*" >&2; else printf '[native] %s\n' "$*"; fi; }
+detail() { (( ! verbose )) || { if (( status_query )); then printf '[native detail] %s\n' "$*" >&2; else printf '[native detail] %s\n' "$*"; fi; }; }
 die() { printf '[native] ERROR: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "required command not found: $1"; }
 read_dmi() { [[ -r "/sys/class/dmi/id/$1" ]] && tr -d '\n' <"/sys/class/dmi/id/$1" || true; }
@@ -84,6 +85,112 @@ kernel_supports_parameter() {
 
 candidate_exists() { [[ -e "$(root_path "$1")" ]]; }
 
+read_active_efi_entry() {
+	[[ -n ${active_efi_loader_path:-} ]] && return 0
+	need efibootmgr
+	local output current line entry
+	local file_pattern='File\(([^)]*)\)'
+	local hd_pattern='HD\([^,]+,[Gg][Pp][Tt],([^,]+),'
+	output=$(efibootmgr -v 2>/dev/null) || die 'UEFI BootCurrent information could not be read with efibootmgr'
+	current=$(sed -n 's/^BootCurrent:[[:space:]]*//p' <<<"$output" | head -n1)
+	[[ "$current" =~ ^[[:xdigit:]]{4}$ ]] || die 'UEFI BootCurrent is missing or invalid; the active boot chain is ambiguous'
+	line=$(awk -v wanted="${current^^}" '
+		match($0, /^Boot([[:xdigit:]]{4})/) {
+			id = toupper(substr($0, RSTART + 4, 4))
+			if (id == wanted) { print; exit }
+		}
+	' <<<"$output")
+	[[ -n "$line" ]] || die "UEFI BootCurrent $current has no matching verbose boot entry"
+	entry=${line#Boot????}
+	entry=${entry#\*}
+	entry=${entry# }
+	active_efi_label=${entry%%HD(*}
+	active_efi_label=${active_efi_label% }
+	if [[ "$line" =~ $file_pattern ]]; then active_efi_loader_path=${BASH_REMATCH[1]}; else die "UEFI BootCurrent $current does not expose an EFI loader path"; fi
+	if [[ "$line" =~ $hd_pattern ]]; then active_efi_partuuid=${BASH_REMATCH[1]}; else die "UEFI BootCurrent $current does not expose a GPT EFI partition UUID"; fi
+	active_efi_loader_normalized=${active_efi_loader_path//\\//}
+	active_efi_loader_normalized=${active_efi_loader_normalized,,}
+	if [[ "$active_efi_loader_normalized" =~ /efi/([^/]+)/ ]]; then active_efi_vendor=${BASH_REMATCH[1]}; else die "UEFI loader path is outside a recognisable EFI vendor directory: $active_efi_loader_path"; fi
+	active_efi_id=${current^^}
+	detail "BootCurrent=$active_efi_id label='$active_efi_label' loader='$active_efi_loader_path' partuuid='$active_efi_partuuid' vendor='$active_efi_vendor'"
+}
+
+expected_efi_vendor() {
+	local distro_id=$1 distro_like=$2
+	case " $distro_id $distro_like " in
+		*linuxmint*|*ubuntu*) printf 'ubuntu\n' ;;
+		*debian*) printf 'debian\n' ;;
+		*fedora*) printf 'fedora\n' ;;
+		*rhel*|*centos*|*rocky*|*almalinux*) printf 'redhat\n' ;;
+		*opensuse*|*suse*) printf 'opensuse\n' ;;
+		*) return 1 ;;
+	esac
+}
+
+active_esp_mount() {
+	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then
+		printf '%s\n' "$(root_path /boot/efi)"
+		return
+	fi
+	local part_link device mount
+	part_link="/dev/disk/by-partuuid/${active_efi_partuuid,,}"
+	[[ -e "$part_link" ]] || die "active EFI partition $active_efi_partuuid is not available under /dev/disk/by-partuuid"
+	device=$(readlink -f -- "$part_link")
+	mount=$(findmnt -rn -S "$device" -o TARGET | head -n1)
+	[[ -n "$mount" ]] || die "active EFI partition $active_efi_partuuid is not mounted; its GRUB chain cannot be verified"
+	printf '%s\n' "$mount"
+}
+
+validate_active_grub_chain() {
+	local distro_id=$1 distro_like=$2 expected_vendor esp loader stub stub_content chain uuid prefix target_uuid
+	candidate_exists /sys/firmware/efi || { detail 'legacy BIOS GRUB boot detected'; return 0; }
+	read_active_efi_entry
+	case "$active_efi_loader_normalized" in
+		*shim*.efi|*grub*.efi) ;;
+		*) die "BootCurrent $active_efi_id uses '$active_efi_loader_path', not a recognised GRUB/shim loader" ;;
+	esac
+	expected_vendor=$(expected_efi_vendor "$distro_id" "$distro_like") || \
+		die "the expected EFI GRUB vendor directory for this distribution cannot be determined safely"
+	[[ "$active_efi_vendor" == "$expected_vendor" ]] || \
+		die "active EFI boot chain mismatch: BootCurrent $active_efi_id loads '$active_efi_loader_path' ($active_efi_label), but this system's GRUB configuration belongs to EFI/$expected_vendor"
+	esp=$(active_esp_mount)
+	loader="$esp/${active_efi_loader_normalized#/}"
+	[[ -e "$loader" ]] || die "active EFI loader is not present on the mounted BootCurrent partition: $loader"
+	stub="$(dirname "$loader")/grub.cfg"
+	[[ -e "$stub" ]] || die "active EFI GRUB stub was not found beside the BootCurrent loader: $stub"
+	if ! stub_content=$(sudo_run cat -- "$stub" 2>/dev/null); then die "active EFI GRUB stub could not be read with administrator privileges: $stub"; fi
+	chain=$(python3 -c '
+import re, sys
+text = sys.stdin.read()
+uuid = ""
+for line in text.splitlines():
+    if "search" in line and ("fs_uuid" in line or "fs-uuid" in line):
+        matches = re.findall(r"(?i)\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b|\b[0-9a-f]{8,}\b", line)
+        if matches:
+            uuid = matches[-1]
+            break
+prefix = ""
+match = re.search(r"(?m)^\s*set\s+prefix\s*=\s*.*?(/boot/grub2?)(?:[\x27\x22\s]|$)", text)
+if match:
+    prefix = match.group(1)
+if not uuid or not prefix:
+    raise SystemExit(1)
+print(f"{uuid}|{prefix}")
+' <<<"$stub_content") || die "active EFI GRUB stub does not expose a verifiable filesystem UUID and /boot/grub prefix: $stub"
+	IFS='|' read -r uuid prefix <<<"$chain"
+	grub_generated_config=$(root_path "$prefix/grub.cfg")
+	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 ]]; then
+		target_uuid=${TOUCHPAD_PATCHER_TEST_GRUB_UUID:-}
+	else
+		target_uuid=$(findmnt -rn -T "$grub_generated_config" -o UUID | head -n1)
+		[[ -n "$target_uuid" ]] || target_uuid=$(grub-probe --target=fs_uuid "$grub_generated_config" 2>/dev/null || true)
+	fi
+	[[ -n "$target_uuid" ]] || die "filesystem UUID for the generated GRUB configuration could not be determined: $grub_generated_config"
+	[[ "${uuid,,}" == "${target_uuid,,}" ]] || \
+		die "active EFI GRUB stub points to filesystem UUID $uuid, but $grub_generated_config is on $target_uuid"
+	log "active EFI GRUB chain verified: BootCurrent $active_efi_id → EFI/$active_efi_vendor → $grub_generated_config"
+}
+
 detect_boot_manager() {
 	if [[ ${TOUCHPAD_PATCHER_TESTING:-0} == 1 && -n ${TOUCHPAD_PATCHER_BOOT_MANAGER:-} ]]; then
 		boot_manager=$TOUCHPAD_PATCHER_BOOT_MANAGER
@@ -92,14 +199,13 @@ detect_boot_manager() {
 		if command -v bootctl >/dev/null; then boot_status=$(bootctl status 2>/dev/null || true); fi
 		if grep -qi 'product:.*systemd-boot' <<<"$boot_status"; then
 			boot_manager=systemd-boot
-		elif command -v efibootmgr >/dev/null; then
-			local current
-			current=$(efibootmgr 2>/dev/null | sed -n 's/^BootCurrent: //p' | head -n1)
-			[[ -z "$current" ]] || current_label=$(efibootmgr 2>/dev/null | sed -n "s/^Boot${current}[* ]*//p" | head -n1)
-			case "${current_label,,}" in
+		elif command -v efibootmgr >/dev/null && candidate_exists /sys/firmware/efi; then
+			read_active_efi_entry
+			current_label=$active_efi_label
+			case "${active_efi_loader_normalized} ${current_label,,}" in
 				*limine*) boot_manager=limine ;;
 				*refind*) boot_manager=refind ;;
-				*grub*|*fedora*|*ubuntu*|*debian*|*opensuse*) boot_manager=grub ;;
+				*grub*|*shim*|*fedora*|*ubuntu*|*debian*|*opensuse*) boot_manager=grub ;;
 			esac
 		fi
 	fi
@@ -146,6 +252,7 @@ detect_adapter() {
 		*) die "unsupported active boot manager: $boot_manager" ;;
 	esac
 	[[ "$adapter" == grubby || -f "$config_path" ]] || die "authoritative $adapter configuration was not found: $config_path"
+	[[ "$adapter" != grub ]] || validate_active_grub_chain "$distro_id" "$distro_like"
 	log "active boot manager: $boot_manager ($adapter adapter)"
 }
 
@@ -370,6 +477,18 @@ rollback_native() {
 native_status() {
 	if grep -Fqw "$token" <<<"$(cmdline_value)"; then printf 'native-active\n'; return 0; fi
 	if load_state; then
+		if [[ ${status:-} != rollback-pending-reboot ]]; then
+			status_query=1
+			detect_adapter
+			if config_contains_token; then
+				verify_generated_contains_token
+			else
+				sudo_run rm -f -- "$state_file"
+				printf '[native] stale native state cleared because the active persistent boot configuration no longer contains %s\n' "$token" >&2
+				printf 'not-managed\n'
+				return 20
+			fi
+		fi
 		printf '%s\n' "${status:-native-configured}"
 		return 10
 	fi

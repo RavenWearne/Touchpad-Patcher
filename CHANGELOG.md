@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.0.3
+
+- Reconcile saved native state with the authoritative persistent boot
+  configuration, clearing stale pending/configured metadata when the managed
+  argument has been removed outside the patcher.
+- On UEFI GRUB systems, bind installation and generated-config verification to
+  the current firmware boot entry, EFI loader/vendor, active EFI system
+  partition, and the GRUB stub's filesystem UUID and prefix.
+- Stop safely before modifying GRUB when `BootCurrent` is missing, ambiguous,
+  belongs to another distribution's GRUB installation, or cannot be traced to
+  the generated configuration; never start the kernel fallback for these
+  native-route errors.
+- Add physical-flow regressions for stale-state recovery, multiple EFI GRUB
+  installations, inactive generated configurations, ambiguous boot chains,
+  and successful install/post-reboot verification through the correct chain.
+
 ## 2.0.2
 
 - Verify generated GRUB kernel command lines through an administrator-readable

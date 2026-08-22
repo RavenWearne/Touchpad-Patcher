@@ -13,7 +13,7 @@ launcher verifies, retains, and rolls back either method.
 ```bash
 git clone --no-checkout https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
 cd "Touchpad Patcher"
-git switch --create stable-v2.0.2 v2.0.2
+git switch --create stable-v2.0.3 v2.0.3
 ./Run\ Touchpad\ Patcher.sh
 ```
 
@@ -27,12 +27,17 @@ by the integration tests.
 On every launch the patcher positively identifies a Lenovo ThinkPad T14 Gen 1
 and dynamically finds `LEN2068` in the readable serio firmware IDs. It then
 inspects the running kernel, current kernel command line, input devices, active
-boot manager, existing patcher state, and installed custom kernels.
+boot chain, existing patcher state, and installed custom kernels. Saved state is
+metadata only: the patcher reconciles it against the real persistent boot
+configuration before treating a native fix as configured.
 
 The normal lifecycle is:
 
 1. Confirm that the stock kernel exposes the Synaptics `intertouch` parameter.
 2. Positively identify the active boot manager and its authoritative settings.
+   On UEFI GRUB systems this includes matching `BootCurrent`, the EFI loader and
+   vendor directory, the active EFI system partition, and the GRUB stub's
+   filesystem UUID/prefix to the generated configuration.
 3. Preserve all unrelated arguments and add only
    `psmouse.synaptics_intertouch=0`.
 4. Regenerate and inspect the boot configuration.
@@ -62,10 +67,11 @@ several choices.
 - CachyOS Limine: `/etc/default/limine` and `limine-mkinitcpio`
 - rEFInd: `/boot/refind_linux.conf`
 
-If several installed boot managers make the active path ambiguous, the patcher
-stops instead of guessing. An unknown boot manager does not automatically cause
-a kernel rebuild because custom-kernel installation would face the same unsafe
-boot integration.
+If several installed boot managers make the active path ambiguous, or an active
+UEFI entry belongs to a different GRUB installation, the patcher stops instead
+of guessing or editing an inactive configuration. An unknown boot manager does
+not automatically cause a kernel rebuild because custom-kernel installation
+would face the same unsafe boot integration.
 
 ## Native rollback
 
