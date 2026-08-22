@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.1.0
+
+- Replace the diagnostic-heavy normal launcher output with a concise current
+  system summary followed by installation-grouped multi-boot status.
+- Group multiple kernels belonging to the same root installation instead of
+  presenting each kernel as a separate operating system.
+- Automatically apply the native stock-kernel patch after all existing
+  hardware, boot-chain, ownership, scope, regeneration, and verification
+  safety checks succeed; the custom-kernel fallback still requires consent.
+- Use user-facing "patched" terminology while retaining precise internal
+  configured/active/verified/kernel-patched state.
+- Keep the complete EFI, GRUB, BLS, os-prober, UUID, mount, state, and device
+  trace in timestamped logs; expose it live with `--verbose` or `--debug`.
+- Avoid repeated discovery output, preserve existing patched and stock kernels,
+  and keep unexpected native failures fail-closed without automatic builds.
+- Add summary regressions for current-system-first output, installation-level
+  kernel grouping, completion state, concise normal output, and automatic
+  native application.
+
 ## 3.0.4
 
 - Fix false Fedora/BLS verification failures caused by combining

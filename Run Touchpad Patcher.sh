@@ -8,8 +8,8 @@ launcher_args=("$@")
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--terminal-child) terminal_child=1; shift ;;
-		--verbose) verbose=1; shift ;;
-		-h|--help) printf 'Usage: %q [--verbose]\n' "$0"; exit 0 ;;
+		--verbose|--debug) verbose=1; shift ;;
+		-h|--help) printf 'Usage: %q [--verbose|--debug]\n' "$0"; exit 0 ;;
 		*) printf 'Unknown argument: %s\n' "$1" >&2; exit 2 ;;
 	esac
 done
@@ -30,6 +30,7 @@ fi
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 installer="$project_dir/scripts/t14-ps2-kernel-installer.sh"
 native_manager="$project_dir/scripts/t14-ps2-native-manager.sh"
+user_summary="$project_dir/scripts/t14-ps2-user-summary.py"
 suffix=t14-len2068-touchpad-patch
 legacy_suffix=t14ps2quirk1
 log_dir="$project_dir/logs"
@@ -43,13 +44,11 @@ detail() {
 }
 
 run_logged() {
-	local status
 	if (( verbose )); then
-		set +e; "$@" > >(tee -a "$log_file") 2> >(tee -a "$log_file" >&2); status=$?; set -e
+		"$@" > >(tee -a "$log_file") 2> >(tee -a "$log_file" >&2)
 	else
-		set +e; "$@" >>"$log_file" 2>&1; status=$?; set -e
+		"$@" >>"$log_file" 2>&1
 	fi
-	return "$status"
 }
 
 sudo_keeper=
@@ -87,11 +86,25 @@ ask_choice() {
 	printf '%s\n' "${answer:-$default}"
 }
 
-[[ -x "$installer" && -x "$native_manager" ]] || { printf 'Required patcher components are missing or not executable.\n' >&2; exit 1; }
-printf '%s\n' 'ThinkPad T14 Gen 1 LEN2068 Touchpad Patcher v3.0.4'
-printf '%s\n\n' 'The stock-kernel boot parameter is preferred; a custom kernel is the guarded fallback.'
+collect_inventory() {
+	if (( verbose )); then
+		"$native_manager" "${native_args[@]}" inventory >"$inventory_file" 2> >(tee -a "$log_file" >&2)
+	else
+		"$native_manager" "${native_args[@]}" inventory >"$inventory_file" 2>>"$log_file"
+	fi
+}
+
+concise_native_error() {
+	local reason
+	reason=$(grep -F '[native] ERROR:' "$log_file" | head -n1 | sed 's/^\[native\] ERROR: //' || true)
+	printf '✗ %s\n' "${reason:-The touchpad patch could not be applied safely.}" >&2
+	printf 'The operation stopped safely; no further changes were made.\n' >&2
+}
+
+[[ -x "$installer" && -x "$native_manager" && -x "$user_summary" ]] || { printf 'Required patcher components are missing or not executable.\n' >&2; exit 1; }
+printf '%s\n' 'ThinkPad T14 Gen 1 LEN2068 Touchpad Patcher v3.1.0'
 if (( ! testing )); then
-	printf '%s\n' 'Administrator authentication is required to manage boot configuration or kernels.'
+	printf '\n%s\n' 'Administrator authentication is required to manage the touchpad patch.'
 	sudo -v
 	while true; do sudo -n true 2>/dev/null || exit; sleep 50; done &
 	sudo_keeper=$!
@@ -112,44 +125,20 @@ if [[ "$running" == *"-$suffix" || "$running" == *"-$legacy_suffix" ]]; then
 	rm -f -- "${XDG_CACHE_HOME:-$HOME/.cache}/t14-len2068-touchpad-patch/.custom-pending-verification"
 fi
 
-printf '\nInspecting the authoritative boot environment and its Linux installations...\n'
 inventory_file=$(mktemp --tmpdir "t14-touchpad-machine-inventory.XXXXXX.json")
-if ! "$native_manager" "${native_args[@]}" inventory >"$inventory_file" 2> >(tee -a "$log_file" >&2); then
-	printf 'Unable to build a safe machine-level boot inventory. No configuration was changed.\n' >&2
+if ! collect_inventory; then
+	concise_native_error
 	exit 1
 fi
-python3 - "$inventory_file" <<'PY'
-import json, sys
-data = json.load(open(sys.argv[1], encoding="utf-8"))
-print("\nDetected Linux installations:\n")
-for item in data["installations"]:
-    print(item["distribution"])
-    print(f"  Kernel: {item['kernel']}")
-    print(f"  Boot method: {item['boot_method']}")
-    if item["kernel_patched"]:
-        print("  ✓ LEN2068 kernel-level remediation detected")
-    if item["native_configured"]:
-        print("  ✓ Native parameter configured")
-    if not item["kernel_patched"] and not item["native_configured"]:
-        print("  ⚠ Native touchpad remediation required")
-    if not item["current"]:
-        print("  ○ Runtime verification pending")
-    print()
-owner = data.get("bootloader_owner")
-if owner:
-    print(f"Authoritative bootloader: {owner} GRUB")
-PY
-rm -f -- "$inventory_file"
-inventory_file=
+printf '\n✓ ThinkPad T14 Gen 1 with LEN2068 detected\n'
+python3 "$user_summary" current "$inventory_file"
 
 if (( current_kernel_patched )); then
-	printf '\nThe running Fedora/custom kernel is already patched; it has been preserved.\n'
-	printf 'The kernel patch and %s are compatible, so machine inspection will continue.\n' 'psmouse.synaptics_intertouch=0'
-	printf 'Verifying the current kernel-level remediation with live touchpad evidence...\n'
-	if "$installer" "${installer_common[@]}" verify; then
-		printf '✓ Current patched-kernel remediation runtime verified.\n'
+	if run_logged "$installer" "${installer_common[@]}" verify; then
+		printf '✓ SynPS/2 touchpad verified\n'
 	else
-		printf 'Current patched-kernel runtime verification failed; no kernel was removed.\n' >&2
+		printf '✗ Current kernel patch did not produce the expected touchpad state.\n' >&2
+		printf 'No kernel was removed.\n' >&2
 		exit 1
 	fi
 fi
@@ -185,60 +174,55 @@ set -e
 detail "native status=$native_status state='$native_state'"
 
 if (( native_status == 0 )); then
-	printf '\nNative stock-kernel method detected. Verifying...\n'
-	if "$native_manager" "${native_args[@]}" verify; then
-		set +e
-		rollback_scope=$("$native_manager" "${native_args[@]}" rollback-capability 2>>"$log_file")
-		rollback_status=$?
-		set -e
-		if (( rollback_status == 20 )) && [[ "$rollback_scope" == external ]]; then
-			printf '\nNative fix recognised and runtime verified.\n'
-			printf 'Its persistent configuration is owned by the authoritative foreign bootloader; rollback is available only from that owning installation.\n'
+	if run_logged "$native_manager" "${native_args[@]}" verify; then
+		(( current_kernel_patched )) || printf '✓ Touchpad patch active\n✓ SynPS/2 touchpad verified\n'
+		python3 "$user_summary" multi "$inventory_file"
+		if python3 "$user_summary" complete "$inventory_file"; then
+			printf '\n✓ This system is fully patched.\n\nNo changes are required.\n'
 		else
-			(( rollback_status == 0 )) || { printf 'Unable to determine native rollback ownership.\n' >&2; exit 1; }
-			choice=$(ask_choice 'Press Enter to keep the native fix, or R to roll it back: ' keep)
-			if [[ "${choice,,}" == r* ]]; then
-				"$native_manager" "${native_args[@]}" rollback
-				printf '\nReboot once more to complete rollback, then run the patcher to confirm it.\n'
-			else
-				printf '\nNative fix kept. Future stock-kernel updates will inherit it.\n'
-			fi
+			printf '\nThe current system is verified. Other listed systems still require patching or runtime verification.\n'
 		fi
 		finish 0
 	fi
-	printf '\nThe native parameter was active but did not produce the required SynPS/2 state.\n'
+	printf '\nThe active touchpad patch did not produce the expected SynPS/2 state.\n'
 	choice=$(ask_choice 'Roll it back and build the custom fallback kernel? [Y/n] ' y)
 	if [[ "${choice,,}" == n* ]]; then finish 1; fi
-	"$native_manager" "${native_args[@]}" rollback
-	printf '\nNative configuration rolled back. Continuing with the custom-kernel fallback...\n'
+	run_logged "$native_manager" "${native_args[@]}" rollback
+	printf '\nThe boot patch was rolled back. Continuing with the custom-kernel fallback...\n'
 elif (( native_status == 10 )); then
 	if [[ "$native_state" == *rollback-pending-reboot* ]]; then
-		"$native_manager" "${native_args[@]}" complete-rollback
-		printf '\nNative rollback verified and completed.\n'
+		run_logged "$native_manager" "${native_args[@]}" complete-rollback
+		printf '\nTouchpad patch rollback verified and completed.\n'
 		finish 0
 	fi
-	printf '\nThe native parameter is configured but is not active in this boot.\n'
-	printf 'Reboot normally, then run the patcher again for verification.\n'
+	python3 "$user_summary" multi "$inventory_file"
+	printf '\n✓ Touchpad patch installed\n○ Reboot to activate and verify it\n'
 	finish 0
 elif (( native_status != 20 )); then
-	printf 'Unable to determine native patch state.\n' >&2
+	concise_native_error
 	exit 1
 fi
 
 if (( native_status == 20 )); then
-	printf '\nChecking whether the stock-kernel native method is supported...\n'
+	python3 "$user_summary" multi "$inventory_file"
+	printf '\nApplying patches...\n'
 	set +e
-	"$native_manager" "${native_args[@]}" --yes apply
+	run_logged "$native_manager" "${native_args[@]}" --yes apply
 	apply_status=$?
 	set -e
 	if (( apply_status == 0 )); then
-		printf '\nNative fix installed. Reboot normally, then run the patcher again to verify or roll it back.\n'
+		if (( current_kernel_patched )); then printf '✓ Existing patched kernel preserved\n'; fi
+		if ! collect_inventory; then concise_native_error; exit 1; fi
+		python3 "$user_summary" result "$inventory_file"
+		printf '\n✓ Touchpad patch installed\n○ Reboot into each newly patched system for runtime verification\n'
 		finish 0
 	elif (( apply_status != 20 )); then
-		printf 'Native installation failed; the kernel fallback was not started automatically.\n' >&2
+		concise_native_error
+		printf 'The custom-kernel fallback was not started.\n' >&2
 		exit "$apply_status"
 	fi
-	printf '\nThe running kernel does not expose the required parameter.\n'
+	printf '\nA safe stock-kernel touchpad patch is not available for this system.\n'
+	printf 'A custom patched kernel can be built instead.\n'
 	choice=$(ask_choice 'Build and install the custom patched-kernel fallback? [Y/n] ' y)
 	[[ "${choice,,}" != n* ]] || finish 0
 fi

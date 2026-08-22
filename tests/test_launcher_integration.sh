@@ -165,7 +165,10 @@ printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouc
 run_launcher "$case_dir/output" TOUCHPAD_PATCHER_TEST_HARDWARE_LOG=1
 grep -Fq 'ThinkPad T14 Gen 1 with LEN2068 detected' "$case_dir/output"
 if grep -Fq 'JSONDecodeError' "$case_dir/output"; then exit 1; fi
-grep -Fq 'Native fix installed' "$case_dir/output"
+if grep -Fq '[native]' "$case_dir/output"; then exit 1; fi
+if grep -Fq 'Apply native' "$case_dir/output"; then exit 1; fi
+grep -RFq '[native] active boot manager:' "$repo_dir/logs"
+grep -Fq 'Touchpad patch installed' "$case_dir/output"
 grep -Fq 'psmouse.synaptics_intertouch=0' "$fixture_dir/etc/default/grub"
 grep -Fq 'linux /boot/vmlinuz-6.8.0-85-generic root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0 $vt_handoff' "$fixture_dir/boot/grub/grub.cfg"
 [[ ! -e "$trace_file" ]] # Native success must not touch build dependencies/fallback.
@@ -185,10 +188,10 @@ if grep -Fq 'psmouse.synaptics_intertouch=0' "$fixture_dir/boot/grub/grub.cfg"; 
 make_case native-active
 printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
 printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash psmouse.synaptics_intertouch=0"' >"$fixture_dir/etc/default/grub"
-printf '%s\n' '    linux /boot/vmlinuz-test root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0 $vt_handoff' >"$fixture_dir/boot/grub/grub.cfg"
+printf '%s\n' "menuentry 'Linux Mint test' {" '    linux /boot/vmlinuz-6.8.0-85-generic root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0 $vt_handoff' '}' >"$fixture_dir/boot/grub/grub.cfg"
 printf '%s\n' 'quiet splash psmouse.synaptics_intertouch=0' >"$fixture_dir/proc/cmdline"
 run_launcher "$case_dir/output"
-grep -Fq 'Native fix kept' "$case_dir/output"
+grep -Fq 'This system is fully patched' "$case_dir/output"
 [[ ! -e "$trace_file" ]]
 
 # Stale pending state is reconciled against the real persistent configuration.
@@ -209,18 +212,19 @@ set -e
 grep -Fq 'stale native state cleared' "$case_dir/stale-error"
 [[ ! -e "$fixture_dir/var/lib/t14-len2068-touchpad-patch/native-state" ]]
 run_launcher "$case_dir/second-output"
-grep -Fq 'Native fix installed' "$case_dir/second-output"
+grep -Fq 'Touchpad patch installed' "$case_dir/second-output"
 
 # Multiple GRUB installations are safe when BootCurrent resolves to Mint/Ubuntu.
 make_case active-ubuntu-chain
 printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
 enable_uefi 0003 Ubuntu ubuntu 0001 Fedora fedora
 run_launcher "$case_dir/install-output"
-grep -Fq 'active GRUB chain traced:' "$case_dir/install-output"
-grep -Fq 'Native fix installed' "$case_dir/install-output"
+if grep -Fq 'active GRUB chain traced:' "$case_dir/install-output"; then exit 1; fi
+grep -RFq 'active GRUB chain traced:' "$repo_dir/logs"
+grep -Fq 'Touchpad patch installed' "$case_dir/install-output"
 printf '%s\n' 'quiet splash psmouse.synaptics_intertouch=0' >"$fixture_dir/proc/cmdline"
 run_launcher "$case_dir/reboot-output"
-grep -Fq 'Native fix kept' "$case_dir/reboot-output"
+grep -Fq 'This system is fully patched' "$case_dir/reboot-output"
 
 # The physical Fedora-GRUB-booting-Mint chain is traced to its os-prober entry,
 # but generated foreign configuration is never edited as a persistent source.
@@ -297,11 +301,11 @@ TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
 status=$?
 set -e
 [[ $status -eq 1 ]]
-grep -Fq 'Active EFI entry' "$case_dir/output" || grep -Fq 'active EFI entry' "$case_dir/output"
-grep -Fq 'current linuxmint installation is booted through Fedora GRUB via an os-prober-generated entry' "$case_dir/output"
-grep -Fq 'collapsed 2 equivalent normal GRUB entries into one logical target (menu ID osprober-mint-current)' "$case_dir/output"
-grep -Fq "Fedora GRUB saved/default entry: $saved_fedora_entry (independent of the current Mint entry)" "$case_dir/output"
-grep -Fq "Fedora saved entry is backed by BLS:" "$case_dir/output"
+if grep -Fq 'active EFI entry' "$case_dir/output"; then exit 1; fi
+grep -RFq 'current linuxmint installation is booted through Fedora GRUB via an os-prober-generated entry' "$repo_dir/logs"
+grep -RFq 'collapsed 2 equivalent normal GRUB entries into one logical target (menu ID osprober-mint-current)' "$repo_dir/logs"
+grep -RFq "Fedora GRUB saved/default entry: $saved_fedora_entry (independent of the current Mint entry)" "$repo_dir/logs"
+grep -RFq "Fedora saved entry is backed by BLS:" "$repo_dir/logs"
 grep -Fq 'cannot be modified safely from the running installation' "$case_dir/output"
 grep -Fq 'mount -o ro --' "$privileged_trace"
 grep -Fq 'findmnt -rn -S' "$privileged_trace"
@@ -324,8 +328,8 @@ TOUCHPAD_PATCHER_TEST_ROOT_UUID=501f6d9f-910b-4ff3-8820-ac4e2272bf8b \
 	TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-chain-run" \
 	TOUCHPAD_TEST_PRIVILEGED_TRACE="$privileged_trace" \
 	run_launcher "$case_dir/foreign-adoption-output"
-grep -Fq 'Native fix recognised and runtime verified' "$case_dir/foreign-adoption-output"
-grep -Fq 'rollback is available only from that owning installation' "$case_dir/foreign-adoption-output"
+grep -Fq 'Touchpad patch active' "$case_dir/foreign-adoption-output"
+if grep -Fq 'bootloader-owning installation' "$case_dir/foreign-adoption-output"; then exit 1; fi
 grep -Fq 'ownership=external' "$fixture_dir/var/lib/t14-len2068-touchpad-patch/native-state"
 grep -Fq 'status=verified' "$fixture_dir/var/lib/t14-len2068-touchpad-patch/native-state"
 set +e
@@ -431,7 +435,7 @@ TOUCHPAD_PATCHER_TEST_ROOT_UUID=fed0fed0-1111-2222-3333-444444444444 run_launche
 status=$?
 set -e
 [[ $status -eq 1 ]]
-grep -Fq 'current fedora installation is booted through Ubuntu GRUB via an os-prober-generated entry' "$case_dir/output"
+grep -RFq 'current fedora installation is booted through Ubuntu GRUB via an os-prober-generated entry' "$repo_dir/logs"
 grep -Fq 'cannot be modified safely from the running installation' "$case_dir/output"
 [[ ! -e "$trace_file" ]]
 
@@ -485,7 +489,7 @@ if grep -Fq 'psmouse.synaptics_intertouch=0' "$fixture_dir/etc/default/grub"; th
 make_case root-only-grub
 printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
 printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash psmouse.synaptics_intertouch=0"' >"$fixture_dir/etc/default/grub"
-printf '%s\n' '    linux /boot/vmlinuz-test root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0 $vt_handoff' >"$fixture_dir/boot/grub/grub.cfg"
+printf '%s\n' "menuentry 'Linux Mint test' {" '    linux /boot/vmlinuz-6.8.0-85-generic root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0 $vt_handoff' '}' >"$fixture_dir/boot/grub/grub.cfg"
 chmod 000 "$fixture_dir/boot/grub/grub.cfg"
 if cat "$fixture_dir/boot/grub/grub.cfg" >/dev/null 2>&1; then exit 1; fi
 cat >"$fake_bin/privileged-run" <<'SH'
@@ -505,15 +509,14 @@ fi
 SH
 chmod +x "$fake_bin/privileged-run"
 run_launcher "$case_dir/output" TOUCHPAD_PATCHER_TEST_SUDO_RUNNER="$fake_bin/privileged-run"
-grep -Fq 'generated GRUB kernel entries verified' "$case_dir/output"
-grep -Fq 'Native fix installed' "$case_dir/output"
+grep -Fq 'Touchpad patch installed' "$case_dir/output"
 [[ ! -e "$trace_file" ]]
 
 # A privileged read failure is explicit and never becomes "parameter absent".
 make_case unreadable-grub
 printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
 printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash psmouse.synaptics_intertouch=0"' >"$fixture_dir/etc/default/grub"
-printf '%s\n' '    linux /boot/vmlinuz-test root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0' >"$fixture_dir/boot/grub/grub.cfg"
+printf '%s\n' "menuentry 'Linux Mint test' {" '    linux /boot/vmlinuz-6.8.0-85-generic root=UUID=test ro quiet splash psmouse.synaptics_intertouch=0' '}' >"$fixture_dir/boot/grub/grub.cfg"
 chmod 000 "$fixture_dir/boot/grub/grub.cfg"
 if cat "$fixture_dir/boot/grub/grub.cfg" >/dev/null 2>&1; then exit 1; fi
 set +e
@@ -528,7 +531,7 @@ grep -Fq 'generated GRUB configuration could not be read with administrator priv
 make_case token-not-on-linux-command
 printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
 printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash psmouse.synaptics_intertouch=0"' >"$fixture_dir/etc/default/grub"
-printf '%s\n' '# psmouse.synaptics_intertouch=0' '    linux /boot/vmlinuz-test root=UUID=test ro quiet splash' >"$fixture_dir/boot/grub/grub.cfg"
+printf '%s\n' '# psmouse.synaptics_intertouch=0' "menuentry 'Linux Mint test' {" '    linux /boot/vmlinuz-6.8.0-85-generic root=UUID=test ro quiet splash' '}' >"$fixture_dir/boot/grub/grub.cfg"
 set +e
 run_launcher "$case_dir/output"
 status=$?
@@ -541,18 +544,19 @@ grep -Fq "generated GRUB kernel command lines do not contain the exact argument 
 # end machine inspection before the native configuration path is considered.
 make_case patched-kernel-keeps-scanning
 printf '%s\n' 0 >"$fixture_dir/sys/module/psmouse/parameters/synaptics_intertouch"
+printf '%s\n' "menuentry 'Linux Mint test' {" '    linux /boot/vmlinuz-7.1.8-t14ps2quirk1 root=UUID=test ro quiet splash' '}' >"$fixture_dir/boot/grub/grub.cfg"
 TOUCHPAD_PATCHER_TEST_UNAME_R=7.1.8-t14ps2quirk1 run_launcher "$case_dir/output"
-grep -Fq 'already patched; it has been preserved' "$case_dir/output"
-grep -Fq 'machine inspection will continue' "$case_dir/output"
-grep -Fq 'Current patched-kernel remediation runtime verified' "$case_dir/output"
-grep -Fq 'Native fix installed' "$case_dir/output"
+grep -Fq 'Kernel-level touchpad patch active' "$case_dir/output"
+grep -Fq 'SynPS/2 touchpad verified' "$case_dir/output"
+grep -Fq 'Existing patched kernel preserved' "$case_dir/output"
+grep -Fq 'Touchpad patch installed' "$case_dir/output"
 grep -Fq 'verify' "$trace_file"
 if grep -Fq ' all' "$trace_file"; then exit 1; fi
 
 # A genuinely unsupported kernel reaches the custom fallback offer/path.
 make_case native-unsupported
 run_launcher "$case_dir/output"
-grep -Fq 'does not expose the required parameter' "$case_dir/output"
+grep -Fq 'safe stock-kernel touchpad patch is not available' "$case_dir/output"
 grep -Fq ' all' "$trace_file"
 
 # An unexpected native application error stops; fallback must not run.
@@ -563,7 +567,7 @@ TOUCHPAD_TEST_UPDATE_GRUB_FAIL=1 run_launcher "$case_dir/output"
 status=$?
 set -e
 [[ $status -eq 42 ]]
-grep -Fq 'Native installation failed; the kernel fallback was not started automatically.' "$case_dir/output"
+grep -Fq 'The custom-kernel fallback was not started.' "$case_dir/output"
 [[ ! -e "$trace_file" ]]
 
 printf '%s\n' 'launcher integration tests passed'

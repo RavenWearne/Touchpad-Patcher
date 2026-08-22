@@ -27,7 +27,8 @@ PATCH_SUFFIXES = ("t14-len2068-touchpad-patch", "t14ps2quirk1")
 def distribution(title: str) -> str:
     lowered = title.lower()
     if "linux mint" in lowered:
-        return "Linux Mint"
+        match = re.search(r"linux mint\s+([0-9]+(?:\.[0-9]+)*)", title, re.IGNORECASE)
+        return f"Linux Mint {match.group(1)}" if match else "Linux Mint"
     if "fedora" in lowered:
         return "Fedora"
     if "ubuntu" in lowered:
@@ -123,9 +124,11 @@ def main() -> int:
     parser.add_argument("--current-os", default="")
     parser.add_argument("--owner", default="")
     parser.add_argument("--bls-data", default="")
+    parser.add_argument("--current-cmdline", default="")
     args = parser.parse_args()
     targets = collect(sys.stdin.read(), args.token)
     targets.extend(collect_bls(args.bls_data, args.token))
+    active_token = args.token in args.current_cmdline.split()
     for target in targets:
         target["current"] = (
             target["root_uuid"].lower() == args.current_root.lower()
@@ -133,6 +136,8 @@ def main() -> int:
         )
         if target["current"] and args.current_os:
             target["distribution"] = args.current_os
+        target["installation_id"] = target["root_uuid"].lower() or target["distribution"].lower()
+        target["native_active"] = bool(target["current"] and active_token)
         target["boot_method"] = (f"{args.owner} BLS" if target.get("bls") else
             f"{args.owner} GRUB / os-prober" if target["os_prober"] else f"{args.owner} GRUB").strip()
         if target["kernel_patched"] and target["native_configured"]:

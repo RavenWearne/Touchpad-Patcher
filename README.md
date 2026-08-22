@@ -14,11 +14,13 @@ launcher verifies, retains, and rolls back either method.
 ```bash
 git clone --no-checkout https://github.com/RavenWearne/thinkpad-synaptics-patch.git "Touchpad Patcher"
 cd "Touchpad Patcher"
-git switch --create stable-v3.0.4 v3.0.4
+git switch --create stable-v3.1.0 v3.1.0
 ./Run\ Touchpad\ Patcher.sh
 ```
 
-Use `--verbose` for live command output. Every run retains a timestamped log
+Normal runs show a concise, installation-grouped summary and automatically
+apply the native patch once the complete safety preflight succeeds. Use
+`--verbose` or `--debug` for the live EFI/GRUB/BLS trace. Every run retains a timestamped log
 under `logs/`. Repository, cache, log, and configuration paths containing
 spaces are supported; the documented `Touchpad Patcher` directory is covered
 by the integration tests.
@@ -51,11 +53,12 @@ The normal lifecycle is:
 4. Preserve all unrelated arguments and add only
    `psmouse.synaptics_intertouch=0`.
 5. Regenerate and inspect the authoritative boot configuration.
-6. Reboot the configured installation and run the same launcher again.
+6. Apply the proven-safe native patch automatically, then reboot the patched
+   installation and run the same launcher again.
 7. Verify that the parameter reached `/proc/cmdline`, SynPS/2 is registered,
    and the native TM3471 RMI4 input device is absent.
-8. Keep the verified fix by pressing Enter, or choose rollback in the same
-   launcher.
+8. Report configuration and runtime verification separately for each logical
+   Linux installation.
 
 If the kernel lacks the parameter, the launcher offers the existing guarded
 custom-kernel build. If the parameter boots but does not produce the required
@@ -100,13 +103,7 @@ rollback remain restricted to the Fedora/bootloader-owning installation.
 
 ## Native rollback
 
-After successful verification the launcher offers:
-
-```text
-Press Enter to keep the native fix, or R to roll it back
-```
-
-Rollback removes only the argument managed by this project, restores a
+Rollback remains available through the native manager's `rollback` action. It removes only the argument managed by this project, restores a
 previous explicit `psmouse.synaptics_intertouch=1` when applicable, regenerates
 the active boot configuration, and asks for one reboot. Run the launcher after
 that reboot to verify the parameter is inactive and clear the managed state.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=3.0.4
+tool_version=3.1.0
 token=psmouse.synaptics_intertouch=0
 conflict=psmouse.synaptics_intertouch=1
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -583,6 +583,7 @@ PY
 		--current-root "$current_root_uuid" \
 		--current-kernel "$current_kernel" \
 		--current-os "$running_os_pretty" \
+		--current-cmdline "$(cmdline_value)" \
 		--owner "${active_efi_label:-GRUB}" \
 		--bls-data "$bls_data" <<<"$content"
 }
