@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.0.4
+
+- Fix false Fedora/BLS verification failures caused by combining
+  `grubby --info=ALL | grep -q` with `set -o pipefail`; early grep success could
+  SIGPIPE the privileged producer and turn a present parameter into failure.
+- Capture and validate the complete privileged `grubby` output before exact
+  argument matching, while keeping genuine `grubby` read failures fatal.
+- Exclude Fedora rescue/recovery BLS entries from normal machine remediation
+  inventory.
+
 ## 3.0.3
 
 - Initialise machine-inventory output routing before hardware validation so

@@ -96,6 +96,9 @@ def collect_bls(text: str, token: str) -> list[dict]:
         kernel = values.get("version", "") or values.get("linux", "").rsplit("/", 1)[-1].removeprefix("vmlinuz-")
         if not kernel:
             continue
+        recovery_evidence = " ".join((identifier, values.get("title", ""), kernel)).lower()
+        if any(marker in recovery_evidence for marker in ("rescue", "recovery")):
+            continue
         targets.append({
             "distribution": distribution(values.get("title", "Fedora")),
             "title": values.get("title", identifier),

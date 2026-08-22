@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-tool_version=3.0.3
+tool_version=3.0.4
 token=psmouse.synaptics_intertouch=0
 conflict=psmouse.synaptics_intertouch=1
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -641,9 +641,15 @@ load_state() {
 	. /dev/stdin <<<"$state_content"
 }
 
+grubby_contains_argument() {
+	local argument=$1 output
+	output=$(sudo_run grubby --info=ALL 2>/dev/null) || die 'Fedora BLS entries could not be read with administrator privileges using grubby'
+	grep -Fqw "$argument" <<<"$output"
+}
+
 config_contains_token() {
 	if [[ "$adapter" == grubby ]]; then
-		sudo_run grubby --info=ALL 2>/dev/null | grep -Fq "$token"
+		grubby_contains_argument "$token"
 	elif [[ "$adapter" == grub-foreign ]]; then
 		read_current_grub_entry
 		[[ "$current_grub_has_token" == 1 ]]
@@ -706,7 +712,7 @@ grub_generated_token_status() {
 
 verify_generated_contains_token() {
 	case "$adapter" in
-		grubby) sudo_run grubby --info=ALL 2>/dev/null | grep -Fq "$token" || die 'generated boot entries do not contain the native parameter' ;;
+		grubby) grubby_contains_argument "$token" || die 'generated boot entries do not contain the native parameter' ;;
 		grub-foreign)
 			read_current_grub_entry
 			[[ "$current_grub_has_token" == 1 ]] || die "the active GRUB entry for '$current_grub_title' does not contain the exact argument '$token'"
@@ -737,7 +743,7 @@ verify_generated_contains_token() {
 verify_generated_absent_token() {
 	case "$adapter" in
 		grubby)
-			if sudo_run grubby --info=ALL 2>/dev/null | grep -Fq "$token"; then die 'generated boot entries still contain the native parameter after rollback'; fi
+			if grubby_contains_argument "$token"; then die 'generated boot entries still contain the native parameter after rollback'; fi
 			return 0
 			;;
 		cachyos-systemd-boot|systemd-boot)
@@ -798,7 +804,7 @@ apply_native() {
 	fi
 	local prior_conflict=0
 	if [[ "$adapter" == grubby ]]; then
-		sudo_run grubby --info=ALL 2>/dev/null | grep -Fq "$conflict" && prior_conflict=1
+		grubby_contains_argument "$conflict" && prior_conflict=1
 		sudo_run grubby --update-kernel=ALL --remove-args="$conflict" --args="$token"
 	else
 		sudo_run grep -Fq "$conflict" "$config_path" && prior_conflict=1

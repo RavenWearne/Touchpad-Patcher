@@ -57,6 +57,16 @@ menuentry 'Linux Mint recovery mode (on /dev/nvme0n1p4)' {{
         self.assertTrue(targets[0]["kernel_patched"])
         self.assertTrue(targets[0]["native_configured"])
 
+    def test_fedora_rescue_bls_entry_is_excluded(self):
+        targets = MODULE.collect_bls(
+            "@@BLS machine-0-rescue.conf\n"
+            "title Fedora Linux (0-rescue-machine)\n"
+            "version 0-rescue-machine\n"
+            "options root=UUID=fedora ro\n",
+            TOKEN,
+        )
+        self.assertEqual([], targets)
+
     def test_materially_different_entries_remain_separate_targets(self):
         config = f"""menuentry 'Mint A' {{
  linux /vmlinuz-6.14.0-37-generic root=UUID={MINT_UUID} ro quiet
